@@ -59,6 +59,11 @@ telemetry, local-first.
 - **One rules source** — `.openade/rules.md` materializes to `CLAUDE.md` /
   `AGENTS.md` / `GEMINI.md` so behavior doesn't change when you switch
   models (hand-written files are never clobbered).
+- **One control surface** — Sessions and Projects views (per-repo state
+  counts and last activity), a Ctrl/⌘K command palette to jump between
+  sessions or start one, a live daemon-health dot, collapsible per-project
+  groups with one-click launch, and a settings dialog (header gear) that
+  applies configuration changes immediately.
 
 Launching a session grounded in a GitHub repo memory entity:
 
@@ -205,7 +210,7 @@ everything else → Backstage) — neither backend is a hard dependency.
 ```sh
 cargo test                                        # 167 Rust tests (real git, real PTYs, mock Backstage, fake gh, fault injection)
 cd apps/desktop && npm test                       # UI unit tests (vitest)
-cd apps/desktop && npm run e2e                    # 12 Playwright flows: real daemon + mock Backstage + gh shim + real Chromium
+cd apps/desktop && npm run e2e                    # 13 Playwright flows: real daemon + mock Backstage + gh shim + real Chromium
 ```
 
 Product-code line coverage is 100% on both the Rust workspace and the UI —

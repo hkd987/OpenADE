@@ -92,6 +92,82 @@ describe("Onboarding", () => {
     expect(onDone).toHaveBeenCalled();
   });
 
+  it("settings mode prefills, keeps an untouched token, and cancels", async () => {
+    putConfig.mockResolvedValue({ ...base, onboarded: true });
+    const onDone = vi.fn();
+    const onClose = vi.fn();
+    render(
+      <Onboarding
+        mode="settings"
+        config={{
+          ...base,
+          onboarded: true,
+          backstage_base_url: "https://backstage.example.com",
+          backstage_token_set: true,
+          memory_repo: "acme/team-memory",
+        }}
+        onDone={onDone}
+        onClose={onClose}
+      />,
+    );
+    // Prefilled from the live config; the token is never echoed back.
+    expect(screen.getByTestId("ob-backstage-url")).toHaveValue(
+      "https://backstage.example.com",
+    );
+    expect(screen.getByTestId("ob-memory-repo")).toHaveValue(
+      "acme/team-memory",
+    );
+    expect(screen.getByTestId("ob-backstage-token")).toHaveAttribute(
+      "placeholder",
+      "(unchanged — type to replace)",
+    );
+    expect(screen.getByTestId("ob-sources")).toHaveTextContent("github");
+
+    // Saving without touching the token omits it — the daemon keeps the
+    // stored one.
+    await userEvent.click(screen.getByTestId("ob-save"));
+    expect(putConfig).toHaveBeenCalledWith({
+      backstage_base_url: "https://backstage.example.com",
+      backstage_token: undefined,
+      memory_repo: "acme/team-memory",
+      onboarded: true,
+    });
+    expect(onDone).toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("settings mode cancel closes without saving", async () => {
+    const onClose = vi.fn();
+    render(
+      <Onboarding
+        mode="settings"
+        config={{ ...base, onboarded: true }}
+        onDone={vi.fn()}
+        onClose={onClose}
+      />,
+    );
+    await userEvent.click(screen.getByTestId("ob-cancel"));
+    expect(onClose).toHaveBeenCalled();
+    expect(putConfig).not.toHaveBeenCalled();
+  });
+
+  it("settings mode sends a typed token", async () => {
+    putConfig.mockResolvedValue({ ...base, onboarded: true });
+    render(
+      <Onboarding
+        mode="settings"
+        config={{ ...base, onboarded: true }}
+        onDone={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+    await userEvent.type(screen.getByTestId("ob-backstage-token"), "new-tok");
+    await userEvent.click(screen.getByTestId("ob-save"));
+    expect(putConfig).toHaveBeenCalledWith(
+      expect.objectContaining({ backstage_token: "new-tok" }),
+    );
+  });
+
   it("shows daemon errors and stays open", async () => {
     putConfig.mockRejectedValue(new Error("memory_repo must be owner/name"));
     const onDone = vi.fn();

@@ -2,23 +2,36 @@ import { useState } from "react";
 import { DaemonConfig, putConfig } from "../api";
 
 /**
- * First-run onboarding: shown once, when the daemon reports it has never
- * been configured. Collects the optional memory settings (Backstage,
- * shared team memory repo) and reports whether the GitHub CLI is ready —
- * with the exact fix when it isn't. Everything is optional: GitHub memory
- * is zero-config whenever `gh` is authenticated, so "Skip" is a fine
- * answer.
+ * Daemon configuration dialog, in two modes:
+ *
+ * - `welcome` (first run): shown once, when the daemon reports it has never
+ *   been configured. Everything is optional — GitHub memory is zero-config
+ *   whenever `gh` is authenticated, so "Skip" is a fine answer.
+ * - `settings` (header gear): the same form, prefilled with the current
+ *   configuration, reachable any time after onboarding.
+ *
+ * Both report whether the GitHub CLI is ready — with the exact fix when it
+ * isn't — and apply saved settings live through `PUT /config`.
  */
 export function Onboarding({
   config,
   onDone,
+  mode = "welcome",
+  onClose,
 }: {
   config: DaemonConfig;
   onDone: () => void;
+  mode?: "welcome" | "settings";
+  onClose?: () => void;
 }) {
-  const [backstageUrl, setBackstageUrl] = useState("");
+  const settings = mode === "settings";
+  const [backstageUrl, setBackstageUrl] = useState(
+    settings ? (config.backstage_base_url ?? "") : "",
+  );
   const [backstageToken, setBackstageToken] = useState("");
-  const [memoryRepo, setMemoryRepo] = useState("");
+  const [memoryRepo, setMemoryRepo] = useState(
+    settings ? (config.memory_repo ?? "") : "",
+  );
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -31,7 +44,11 @@ export function Onboarding({
           ? { onboarded: true }
           : {
               backstage_base_url: backstageUrl,
-              backstage_token: backstageToken,
+              // Absent = keep the stored token; typing replaces it and an
+              // explicit clear is an empty string, which the daemon treats
+              // as "no token".
+              backstage_token:
+                settings && backstageToken === "" ? undefined : backstageToken,
               memory_repo: memoryRepo,
               onboarded: true,
             },
@@ -48,10 +65,11 @@ export function Onboarding({
   return (
     <div className="onboarding-overlay" data-testid="onboarding">
       <div className="onboarding-card">
-        <h2>Welcome to OpenADE</h2>
+        <h2>{settings ? "Settings" : "Welcome to OpenADE"}</h2>
         <p className="onboarding-lede">
-          30-second setup — everything here is optional and can be changed
-          later. Environment variables always take precedence.
+          {settings
+            ? "Changes apply immediately — no restart. Environment variables always take precedence."
+            : "30-second setup — everything here is optional and can be changed later. Environment variables always take precedence."}
         </p>
 
         <div
@@ -84,6 +102,12 @@ export function Onboarding({
           )}
         </div>
 
+        {settings && config.memory_sources.length > 0 && (
+          <div className="onboarding-sources" data-testid="ob-sources">
+            Active memory sources: {config.memory_sources.join(", ")}
+          </div>
+        )}
+
         <div className="form-row">
           <label htmlFor="ob-backstage-url">Backstage URL (optional)</label>
           <input
@@ -101,6 +125,11 @@ export function Onboarding({
             type="password"
             value={backstageToken}
             onChange={(e) => setBackstageToken(e.target.value)}
+            placeholder={
+              settings && config.backstage_token_set
+                ? "(unchanged — type to replace)"
+                : undefined
+            }
             data-testid="ob-backstage-token"
           />
         </div>
@@ -134,16 +163,27 @@ export function Onboarding({
             disabled={busy}
             data-testid="ob-save"
           >
-            {busy ? "Saving…" : "Save & start"}
+            {busy ? "Saving…" : settings ? "Save" : "Save & start"}
           </button>
-          <button
-            className="secondary"
-            onClick={() => void finish(true)}
-            disabled={busy}
-            data-testid="ob-skip"
-          >
-            Skip for now
-          </button>
+          {settings ? (
+            <button
+              className="secondary"
+              onClick={onClose}
+              disabled={busy}
+              data-testid="ob-cancel"
+            >
+              Cancel
+            </button>
+          ) : (
+            <button
+              className="secondary"
+              onClick={() => void finish(true)}
+              disabled={busy}
+              data-testid="ob-skip"
+            >
+              Skip for now
+            </button>
+          )}
         </div>
       </div>
     </div>

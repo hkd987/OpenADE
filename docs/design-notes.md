@@ -33,6 +33,10 @@ sweep. Closed in this pass:
 | Colored status dot before the state label | CSS dot in the state's color on every card (state colors unchanged) |
 | Elapsed time in the session header | "started 5m ago" under the worktree path in the detail header |
 | Harness attribution in the session header | Already present: harness on the card + handoff picker in the header |
+| Header connection indicator (green dot) | Live daemon-health dot next to the logo (green connected / red unreachable) |
+| Projects / Sessions top-level views | View pills in the header; the Projects view aggregates per-repo state counts, last activity, and a "+" launcher |
+| ⌘K affordance | Ctrl/⌘K command palette: type-to-jump to any session, or start a new one; the header shows the ⌘K chip |
+| Settings gear | Header gear opens the settings dialog (same form as onboarding, prefilled from the live config; saved settings apply immediately, stored tokens survive edits untouched) |
 
 Xirp's screenshot also shows the real Claude Code welcome banner in the
 terminal — OpenADE's PTY renders the same thing when the real CLI runs

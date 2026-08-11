@@ -281,3 +281,35 @@ test("killing a session marks it failed in the grid", async ({ page }) => {
     page.locator(".session-card .state", { hasText: "failed" }),
   ).toHaveCount(1);
 });
+
+test("header affordances: palette, projects view, settings", async ({
+  page,
+}) => {
+  await page.goto("/");
+  // The header health dot reports the connected daemon.
+  await expect(page.getByTestId("daemon-health")).toHaveClass(/ok/);
+
+  // ⌘K/Ctrl+K palette jumps to a session by typing.
+  await page.keyboard.press("Control+k");
+  await expect(page.getByTestId("palette")).toBeVisible();
+  await page.getByTestId("palette-input").fill("repo task");
+  await page.getByTestId("palette-input").press("Enter");
+  await expect(page.getByTestId("palette")).toHaveCount(0);
+  await expect(page.getByTestId("session-detail")).toContainText("repo task");
+
+  // Projects view aggregates per-repo state counts.
+  await page.getByTestId("view-projects").click();
+  const card = page.getByTestId("project-card");
+  await expect(card).toContainText("fixture-repo");
+  await expect(card).toContainText("running");
+  await page.getByTestId("view-sessions").click();
+
+  // Settings opens prefilled from the live daemon config and cancels.
+  await page.getByTestId("settings-button").click();
+  await expect(page.getByTestId("onboarding")).toBeVisible();
+  await expect(page.getByTestId("ob-memory-repo")).toHaveValue(
+    "acme/team-memory",
+  );
+  await page.getByTestId("ob-cancel").click();
+  await expect(page.getByTestId("onboarding")).toHaveCount(0);
+});

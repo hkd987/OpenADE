@@ -101,6 +101,8 @@ button presses — rather than through the HTTP API:
 | 37 | Onboarding guardrails | `PUT /config` with a malformed repo → 400 with the reason; daemon-side env vars (`BACKSTAGE_BASE_URL`/`OPENADE_MEMORY_REPO`) mark the daemon pre-onboarded so operators never see the flow; the signed-out/missing-`gh` states render the fix instructions (`gh auth login` / cli.github.com) in the status card |
 | 38 | Copilot CLI harness | Launched a `copilot-cli` session through the API against the shim: PTY runs `copilot`, rules materialize to `AGENTS.md`, session shows in the grid attributed "Copilot CLI" and is offered as a handoff target (screenshot above shows it running); real-CLI flag mapping (`-p`, `--resume`, `~/.copilot/mcp-config.json`) gated on the Phase 0 spike like the other harnesses |
 | 39 | Xirp parity affordances | Refreshed screenshot verifies: per-project "+" launches into that repo, chevroned collapsible project groups, colored state dots on every card, and "started N ago" in the detail header |
+| 40 | Header affordances | Driven in Chromium: health dot green while connected; Ctrl+K opens the palette, typing "repo task" + Enter jumps to that session; Projects view aggregates per-repo state counts ("1 running · 1 needs-input · 1 completed · 1 failed", screenshot in repo); settings gear opens the dialog prefilled from the live config (`acme/team-memory`) and cancels cleanly |
+| 41 | Settings token safety | Editing settings without retyping the Backstage token keeps the stored one (`backstage_token_set` stays true); an explicit empty string clears it — verified over HTTP |
 
 ![Artifact banner with the shared team memory push](img/artifact-shared-memory.png)
 

@@ -332,6 +332,37 @@ async fn config_endpoint_onboards_and_applies_settings_live() {
     assert!(stored.onboarded);
     assert_eq!(stored.memory_repo.as_deref(), Some("acme/team-memory"));
 
+    // A later settings edit that omits the token (it is never echoed back)
+    // keeps the stored one; an explicit empty string clears it.
+    let res = app
+        .clone()
+        .oneshot(request(
+            "PUT",
+            "/config",
+            Some(serde_json::json!({
+                "backstage_base_url": "http://127.0.0.1:1/api",
+                "memory_repo": "acme/team-memory",
+                "onboarded": true,
+            })),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(body_json(res).await["backstage_token_set"], true);
+    let res = app
+        .clone()
+        .oneshot(request(
+            "PUT",
+            "/config",
+            Some(serde_json::json!({
+                "backstage_base_url": "http://127.0.0.1:1/api",
+                "backstage_token": "",
+                "onboarded": true,
+            })),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(body_json(res).await["backstage_token_set"], false);
+
     // With gh disabled entirely, status says so (found=false, auth
     // unknown) so the UI can show install instructions.
     std::env::remove_var("OPENADE_GH_BIN");

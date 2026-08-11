@@ -95,7 +95,7 @@ async fn get_config(State(daemon): State<Arc<Daemon>>) -> Json<serde_json::Value
 
 async fn put_config(
     State(daemon): State<Arc<Daemon>>,
-    Json(settings): Json<crate::config::Settings>,
+    Json(mut settings): Json<crate::config::Settings>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     if let Some(repo) = settings.memory_repo.as_ref().filter(|r| !r.is_empty()) {
         if repo.split('/').filter(|part| !part.is_empty()).count() != 2 {
@@ -104,6 +104,12 @@ async fn put_config(
                 format!("memory_repo must be owner/name (got {repo:?})"),
             ));
         }
+    }
+    // The token is never echoed back by GET, so a settings edit that leaves
+    // the field untouched (absent) keeps the stored token; an explicit
+    // empty string clears it.
+    if settings.backstage_token.is_none() {
+        settings.backstage_token = daemon.settings().backstage_token;
     }
     let result = tokio::task::spawn_blocking(move || {
         daemon
