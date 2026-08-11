@@ -110,7 +110,15 @@ mod tests {
         assert_eq!("claude".parse::<Harness>().unwrap(), Harness::ClaudeCode);
         assert_eq!("codex".parse::<Harness>().unwrap(), Harness::CodexCli);
         assert_eq!("gemini".parse::<Harness>().unwrap(), Harness::GeminiCli);
-        assert!("cursor".parse::<Harness>().is_err());
+        let err = "cursor".parse::<Harness>().unwrap_err();
+        assert!(err.to_string().contains("cursor"));
+    }
+
+    #[test]
+    fn display_and_names() {
+        assert_eq!(Harness::ClaudeCode.to_string(), "claude-code");
+        assert_eq!(Harness::CodexCli.display_name(), "Codex CLI");
+        assert_eq!(Harness::GeminiCli.program(), "gemini");
     }
 
     #[test]

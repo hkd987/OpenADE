@@ -439,6 +439,17 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn ping_and_malformed_json_are_handled() {
+        let s = server();
+        let res = call(&s, json!({"jsonrpc": "2.0", "id": 7, "method": "ping"})).await;
+        assert_eq!(res["result"], json!({}));
+
+        let res = s.handle_message("this is not json").await.unwrap();
+        assert_eq!(res["error"]["code"], -32700);
+        assert!(res["id"].is_null());
+    }
+
+    #[tokio::test]
     async fn unknown_method_is_a_json_rpc_error() {
         let res = call(
             &server(),

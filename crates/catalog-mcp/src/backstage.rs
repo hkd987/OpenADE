@@ -252,6 +252,54 @@ mod tests {
         assert_eq!(hits[0].metadata.name, "payments-api");
     }
 
+    #[test]
+    fn config_from_env_requires_base_url() {
+        // Env-var access is process-global; this is the only test touching
+        // these variables.
+        std::env::remove_var("BACKSTAGE_BASE_URL");
+        std::env::remove_var("BACKSTAGE_TOKEN");
+        assert!(BackstageConfig::from_env().is_err());
+
+        std::env::set_var("BACKSTAGE_BASE_URL", "https://backstage.example.com");
+        std::env::set_var("BACKSTAGE_TOKEN", "");
+        let config = BackstageConfig::from_env().unwrap();
+        assert_eq!(config.base_url, "https://backstage.example.com");
+        assert!(config.token.is_none(), "empty token treated as unset");
+
+        std::env::set_var("BACKSTAGE_TOKEN", "sekrit");
+        let config = BackstageConfig::from_env().unwrap();
+        assert_eq!(config.token.as_deref(), Some("sekrit"));
+        std::env::remove_var("BACKSTAGE_BASE_URL");
+        std::env::remove_var("BACKSTAGE_TOKEN");
+    }
+
+    #[tokio::test]
+    async fn techdocs_404_maps_to_not_found() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&server)
+            .await;
+        let p = provider(&server, None).await;
+        let err = p
+            .get_techdocs_page(&"component:default/x".parse().unwrap(), "missing.md")
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ProviderError::NotFound(_)));
+    }
+
+    #[tokio::test]
+    async fn search_upstream_error_carries_status() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(503).set_body_string("down"))
+            .mount(&server)
+            .await;
+        let p = provider(&server, None).await;
+        let err = p.search("x", 5).await.unwrap_err();
+        assert!(matches!(err, ProviderError::Upstream { status: 503, .. }));
+    }
+
     #[tokio::test]
     async fn fetches_techdocs_pages() {
         let server = MockServer::start().await;

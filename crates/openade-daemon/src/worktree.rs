@@ -354,6 +354,39 @@ mod tests {
     }
 
     #[test]
+    fn commit_file_on_branch_reuses_head_and_rejects_existing_branches() {
+        let (_tmp, mgr) = manager();
+        mgr.commit_file_on_branch(
+            "openade/knowledge-test",
+            Path::new("docs/openade/sessions/a.md"),
+            "artifact body\n",
+            "docs: test artifact",
+        )
+        .unwrap();
+
+        let show = Command::new("git")
+            .arg("-C")
+            .arg(mgr.repo_root())
+            .args(["show", "openade/knowledge-test:docs/openade/sessions/a.md"])
+            .output()
+            .unwrap();
+        assert!(show.status.success());
+        assert_eq!(String::from_utf8_lossy(&show.stdout), "artifact body\n");
+
+        // Same branch again: git refuses, the temp worktree is still cleaned.
+        let err = mgr.commit_file_on_branch(
+            "openade/knowledge-test",
+            Path::new("docs/openade/sessions/b.md"),
+            "x",
+            "msg",
+        );
+        assert!(matches!(err, Err(WorktreeError::Git { .. })));
+        assert_eq!(mgr.list().unwrap().len(), 1, "no stray worktrees remain");
+
+        mgr.prune().unwrap();
+    }
+
+    #[test]
     fn diff_covers_uncommitted_and_committed_task_work() {
         let (_tmp, mgr) = manager();
         let wt = mgr.create("diff me").unwrap();

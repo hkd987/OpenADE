@@ -48,10 +48,23 @@ pub struct LaunchRequest {
     pub mcp_servers: Vec<McpServerSpec>,
 }
 
+/// Where an MCP registration lives.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum RegistrationScope {
+    /// A file inside the worktree (`file` is worktree-relative); the daemon
+    /// writes it automatically at launch.
+    Project,
+    /// User-level config (e.g. `~/.codex/config.toml`); surfaced to the
+    /// user instead of silently editing their home directory.
+    User,
+}
+
 /// A config change the harness needs before launch: write/merge `snippet`
-/// into `file` (relative paths are relative to the worktree).
+/// into `file`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct McpRegistration {
+    pub scope: RegistrationScope,
     pub file: PathBuf,
     /// `json` or `toml` — how `snippet` should be merged.
     pub format: String,
@@ -138,6 +151,7 @@ impl HarnessAdapter for ClaudeAdapter {
         // Project-scoped `.mcp.json` in the worktree root.
         let snippet = serde_json::json!({ "mcpServers": mcp_servers_json(servers) });
         vec![McpRegistration {
+            scope: RegistrationScope::Project,
             file: PathBuf::from(".mcp.json"),
             format: "json".into(),
             snippet: serde_json::to_string_pretty(&snippet).expect("static json"),
@@ -199,6 +213,7 @@ impl HarnessAdapter for CodexAdapter {
             toml.push('\n');
         }
         vec![McpRegistration {
+            scope: RegistrationScope::User,
             file: PathBuf::from("~/.codex/config.toml"),
             format: "toml".into(),
             snippet: toml.trim_end().to_string(),
@@ -246,6 +261,7 @@ impl HarnessAdapter for GeminiAdapter {
         // Project-scoped .gemini/settings.json with an mcpServers block.
         let snippet = serde_json::json!({ "mcpServers": mcp_servers_json(servers) });
         vec![McpRegistration {
+            scope: RegistrationScope::Project,
             file: PathBuf::from(".gemini/settings.json"),
             format: "json".into(),
             snippet: serde_json::to_string_pretty(&snippet).expect("static json"),
@@ -325,12 +341,23 @@ mod tests {
     }
 
     #[test]
-    fn codex_mcp_registration_is_toml() {
+    fn codex_mcp_registration_is_user_scoped_toml() {
         let regs =
             adapter_for(Harness::CodexCli).mcp_registrations(Path::new("/wt"), &[catalog_server()]);
         assert_eq!(regs[0].format, "toml");
+        // User scope: the daemon must never write this into the worktree.
+        assert_eq!(regs[0].scope, RegistrationScope::User);
         assert!(regs[0].snippet.contains("[mcp_servers.catalog]"));
         assert!(regs[0].snippet.contains("command = \"catalog-mcp\""));
+    }
+
+    #[test]
+    fn project_scopes_match_worktree_relative_files() {
+        for h in [Harness::ClaudeCode, Harness::GeminiCli] {
+            let regs = adapter_for(h).mcp_registrations(Path::new("/wt"), &[catalog_server()]);
+            assert_eq!(regs[0].scope, RegistrationScope::Project);
+            assert!(regs[0].file.is_relative());
+        }
     }
 
     #[test]
@@ -340,6 +367,20 @@ mod tests {
         assert_eq!(regs[0].file, PathBuf::from(".gemini/settings.json"));
         let parsed: serde_json::Value = serde_json::from_str(&regs[0].snippet).unwrap();
         assert!(parsed["mcpServers"]["catalog"].is_object());
+    }
+
+    #[test]
+    fn codex_http_transport_renders_a_url_entry() {
+        let server = McpServerSpec {
+            name: "catalog".into(),
+            transport: McpTransport::Http {
+                url: "http://127.0.0.1:7778/mcp".into(),
+            },
+        };
+        let regs = adapter_for(Harness::CodexCli).mcp_registrations(Path::new("/wt"), &[server]);
+        assert!(regs[0]
+            .snippet
+            .contains("url = \"http://127.0.0.1:7778/mcp\""));
     }
 
     #[test]

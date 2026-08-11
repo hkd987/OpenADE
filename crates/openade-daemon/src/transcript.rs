@@ -465,6 +465,53 @@ mod tests {
     }
 
     #[test]
+    fn migrates_indexes_created_before_repo_root_existed() {
+        let tmp = TempDir::new().unwrap();
+        fs::create_dir_all(tmp.path().join("transcripts")).unwrap();
+        let db = Connection::open(tmp.path().join("index.db")).unwrap();
+        db.execute_batch(
+            "CREATE TABLE sessions (
+                 id TEXT PRIMARY KEY, title TEXT NOT NULL, harness TEXT NOT NULL,
+                 entity_ref TEXT, state TEXT NOT NULL, started_at TEXT NOT NULL,
+                 ended_at TEXT, transcript_path TEXT NOT NULL
+             );
+             CREATE TABLE events (
+                 session_id TEXT NOT NULL, seq INTEGER NOT NULL, ts TEXT NOT NULL,
+                 kind TEXT NOT NULL, PRIMARY KEY (session_id, seq)
+             );
+             INSERT INTO sessions VALUES ('00000000-0000-0000-0000-000000000001',
+                 'old session', 'claude-code', NULL, 'completed',
+                 '2026-01-01T00:00:00+00:00', NULL, '/old.jsonl');",
+        )
+        .unwrap();
+        drop(db);
+
+        let store = TranscriptStore::open(tmp.path()).unwrap();
+        let all = store.list_sessions().unwrap();
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].repo_root, PathBuf::new());
+
+        // New sessions insert fine after migration.
+        let m = meta(None);
+        store.begin_session(&m).unwrap();
+        assert_eq!(store.list_sessions().unwrap().len(), 2);
+        assert_eq!(store.projects().unwrap(), vec![PathBuf::from("/tmp/repo")]);
+    }
+
+    #[test]
+    fn reading_an_unknown_transcript_fails() {
+        let (_tmp, store) = store();
+        assert!(matches!(
+            store.read_transcript(Uuid::new_v4()),
+            Err(TranscriptError::UnknownSession(_))
+        ));
+        assert!(matches!(
+            store.update_state(Uuid::new_v4(), SessionState::Running),
+            Err(TranscriptError::UnknownSession(_))
+        ));
+    }
+
+    #[test]
     fn state_updates_are_indexed() {
         let (_tmp, store) = store();
         let m = meta(None);

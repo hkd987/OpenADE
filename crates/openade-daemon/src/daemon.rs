@@ -254,21 +254,24 @@ impl Daemon {
         // surfaced to the caller instead of silently editing user config.
         let adapter = adapter_for(req.harness);
         for reg in adapter.mcp_registrations(&wt.path, &mcp_servers) {
-            if reg.file.is_relative() {
-                let target = wt.path.join(&reg.file);
-                if let Some(parent) = target.parent() {
-                    fs::create_dir_all(parent)?;
+            match reg.scope {
+                crate::adapters::RegistrationScope::Project => {
+                    let target = wt.path.join(&reg.file);
+                    if let Some(parent) = target.parent() {
+                        fs::create_dir_all(parent)?;
+                    }
+                    if !target.exists() {
+                        fs::write(&target, &reg.snippet)?;
+                    }
                 }
-                if !target.exists() {
-                    fs::write(&target, &reg.snippet)?;
+                crate::adapters::RegistrationScope::User => {
+                    tracing::info!(
+                        "manual MCP registration needed for {}: {} ({})",
+                        req.harness,
+                        reg.file.display(),
+                        reg.note
+                    );
                 }
-            } else {
-                tracing::info!(
-                    "manual MCP registration needed for {}: {} ({})",
-                    req.harness,
-                    reg.file.display(),
-                    reg.note
-                );
             }
         }
 
@@ -1036,6 +1039,26 @@ mod tests {
         req.entity_ref = Some("component:default/ghost".into());
         let meta = daemon.launch(req, None).unwrap();
         assert!(meta.worktree_path.is_some());
+    }
+
+    #[test]
+    fn user_scoped_registrations_never_touch_the_worktree() {
+        let (_tmp, daemon, repo) = setup();
+        let mut req = launch_req(&repo, "true");
+        req.harness = Harness::CodexCli;
+        req.mcp_servers = vec![McpServerSpec {
+            name: "catalog".into(),
+            transport: crate::adapters::McpTransport::Stdio {
+                command: "catalog-mcp".into(),
+                args: vec![],
+            },
+        }];
+        let meta = daemon.launch(req, None).unwrap();
+        let wt = meta.worktree_path.unwrap();
+        // Codex registration is user-scoped (~/.codex/config.toml): nothing
+        // like a literal "~" directory may appear in the worktree.
+        assert!(!wt.join("~").exists());
+        assert!(!wt.join(".mcp.json").exists());
     }
 
     #[test]

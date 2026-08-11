@@ -464,6 +464,29 @@ mod tests {
     }
 
     #[test]
+    fn spawn_of_a_missing_program_is_an_error() {
+        let host = PtyHost::new();
+        let spec = CommandSpec::new("definitely-not-a-real-binary-xyz");
+        assert!(host.spawn(Uuid::new_v4(), &spec, None).is_err());
+        // Host-level errors for unknown ids.
+        assert!(host.get(Uuid::new_v4()).is_err());
+        assert!(host.remove(Uuid::new_v4()).is_err());
+    }
+
+    #[test]
+    fn resize_and_ids_work_on_a_live_session() {
+        let host = PtyHost::new();
+        let id = Uuid::new_v4();
+        let spec = CommandSpec::new("sh").arg("-c").arg("sleep 30");
+        let session = host.spawn(id, &spec, None).unwrap();
+        assert_eq!(session.id(), id);
+        session.resize(40, 100).unwrap();
+        assert_eq!(host.ids(), vec![id]);
+        assert_eq!(session.scrollback_len(), session.scrollback().len());
+        host.remove(id).unwrap();
+    }
+
+    #[test]
     fn strip_ansi_removes_csi_and_osc() {
         assert_eq!(strip_ansi("\u{1b}[1;32mhello\u{1b}[0m"), "hello");
         assert_eq!(strip_ansi("\u{1b}]0;title\u{07}prompt> "), "prompt> ");

@@ -307,4 +307,30 @@ mod tests {
         assert!(b.estimated_tokens() > 0);
         assert!(b.within_budget());
     }
+
+    #[test]
+    fn markdown_falls_back_when_optional_fields_are_missing() {
+        let mut b = sample_bundle();
+        b.owner = Some(OwnerCard {
+            entity_ref: "group:default/mystery-team".into(),
+            display_name: None,
+            contact: None,
+        });
+        b.dependencies[0].description = Some("the ledger of record".into());
+        b.apis[0].description = Some("v2 of the payments surface".into());
+        b.prior_sessions.push(PriorSessionSummary {
+            session_id: "s-9".into(),
+            harness: None,
+            completed_at: None,
+            summary: "Fixed the flaky retry test.".into(),
+        });
+
+        let md = b.to_markdown();
+        // Owner falls back to the bare ref when no display name exists.
+        assert!(md.contains("group:default/mystery-team"));
+        assert!(md.contains("the ledger of record"));
+        assert!(md.contains("v2 of the payments surface"));
+        assert!(md.contains("## Prior sessions"));
+        assert!(md.contains("Fixed the flaky retry test."));
+    }
 }

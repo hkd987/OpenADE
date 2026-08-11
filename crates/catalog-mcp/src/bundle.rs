@@ -152,6 +152,66 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn entity_without_relations_yields_a_minimal_bundle() {
+        let provider = MockProvider::with_payments_graph();
+        let bundle = build_context_bundle(
+            &provider,
+            &"component:default/ledger".parse().unwrap(),
+            vec![],
+        )
+        .await
+        .unwrap();
+        assert!(bundle.owner.is_none());
+        assert!(bundle.dependencies.is_empty());
+        assert!(bundle.apis.is_empty());
+        assert!(bundle.within_budget());
+    }
+
+    #[tokio::test]
+    async fn unresolvable_owner_is_kept_as_a_bare_ref() {
+        use crate::provider::{CatalogProvider, Entity, EntityRef, ProviderError};
+        use async_trait::async_trait;
+
+        /// Delegates to the payments graph but cannot resolve group entities
+        /// (e.g. the org's Groups live in a different catalog segment).
+        struct NoGroups(MockProvider);
+
+        #[async_trait]
+        impl CatalogProvider for NoGroups {
+            async fn get_entity(&self, r: &EntityRef) -> Result<Entity, ProviderError> {
+                if r.kind == "group" {
+                    return Err(ProviderError::NotFound(r.to_string()));
+                }
+                self.0.get_entity(r).await
+            }
+            async fn search(&self, q: &str, l: usize) -> Result<Vec<Entity>, ProviderError> {
+                self.0.search(q, l).await
+            }
+            async fn get_techdocs_page(
+                &self,
+                r: &EntityRef,
+                p: &str,
+            ) -> Result<String, ProviderError> {
+                self.0.get_techdocs_page(r, p).await
+            }
+        }
+
+        let provider = NoGroups(MockProvider::with_payments_graph());
+        let bundle = build_context_bundle(
+            &provider,
+            &"component:default/payments-api".parse().unwrap(),
+            vec![],
+        )
+        .await
+        .unwrap();
+        let owner = bundle.owner.clone().unwrap();
+        assert_eq!(owner.entity_ref, "group:default/payments-team");
+        assert!(owner.display_name.is_none());
+        // Markdown falls back to the raw ref when there is no display name.
+        assert!(bundle.to_markdown().contains("group:default/payments-team"));
+    }
+
+    #[tokio::test]
     async fn missing_entity_propagates_not_found() {
         let provider = MockProvider::with_payments_graph();
         let err = build_context_bundle(
