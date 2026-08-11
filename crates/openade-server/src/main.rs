@@ -19,9 +19,7 @@ async fn main() -> anyhow::Result<()> {
 
     let data_dir = std::env::var("OPENADE_SERVER_DATA_DIR")
         .map(std::path::PathBuf::from)
-        .unwrap_or_else(|_| {
-            dirs_fallback_home().join(".openade-server")
-        });
+        .unwrap_or_else(|_| dirs_fallback_home().join(".openade-server"));
     let admin_token = std::env::var("OPENADE_SERVER_ADMIN_TOKEN").unwrap_or_default();
     if admin_token.is_empty() {
         tracing::warn!(

@@ -639,6 +639,9 @@ fn configure_wires_memory_from_settings_and_env() {
         backstage_token: Some("token".into()),
         memory_repo: Some("acme/team-memory".into()),
         onboarded: true,
+        server_url: None,
+        server_token: None,
+        server_workspace: None,
     };
     daemon.configure(&settings);
     assert!(daemon.has_catalog());
@@ -1339,4 +1342,119 @@ fn publishing_the_same_artifact_twice_fails_cleanly() {
         daemon.publish_artifact(meta.id),
         Err(DaemonError::Worktree(_))
     ));
+}
+
+// Env mutex across awaits: single-threaded test runtime, env spans the test.
+#[allow(clippy::await_holding_lock)]
+#[tokio::test]
+async fn share_and_pickup_round_trip_through_a_real_workspace_server() {
+    let _guard = catalog_mcp::testutil::ENV_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let tmp = TempDir::new().unwrap();
+    let repo = tmp.path().join("repo");
+    std::fs::create_dir(&repo).unwrap();
+    init_repo(&repo);
+    let (url, token, ws) = crate::workspace::tests::boot_server(&tmp.path().join("srv")).await;
+    std::env::set_var(crate::workspace::SERVER_URL_ENV, &url);
+    std::env::set_var(crate::workspace::SERVER_TOKEN_ENV, &token);
+    std::env::set_var(crate::workspace::SERVER_WORKSPACE_ENV, ws.to_string());
+
+    let daemon = Daemon::open(tmp.path().join("data")).unwrap();
+    assert!(daemon.workspace_client().is_some());
+
+    // Nothing is shared until asked; share() uploads the neutral record.
+    let mut req = launch_req(&repo, "true");
+    req.entity_ref = Some("repo:acme/payments".into());
+    let meta = daemon.launch(req, None).unwrap();
+    wait_state(&daemon, meta.id, SessionState::Completed);
+    std::fs::write(
+        meta.worktree_path.clone().unwrap().join("README.md"),
+        "hi\nshared work\n",
+    )
+    .unwrap();
+    let shared = daemon.share(meta.id).await.unwrap();
+    assert_eq!(shared.shared_by, "casey");
+    assert_eq!(shared.harness, "claude-code");
+    assert_eq!(shared.entity_ref.as_deref(), Some("repo:acme/payments"));
+
+    // Pickup renders the record for a DIFFERENT harness: new local session,
+    // pickup doc present, entity carried, takeover prompt recorded.
+    let picked = daemon
+        .pickup(PickupRequest {
+            workspace_session_id: shared.id,
+            harness: Harness::CopilotCli,
+            repo_root: repo.clone(),
+            checkout: CheckoutMode::default(),
+            command_override: Some(sh("true")),
+        })
+        .await
+        .unwrap();
+    assert_eq!(picked.harness, Harness::CopilotCli);
+    assert!(picked.title.starts_with("pickup: "));
+    assert_eq!(picked.entity_ref.as_deref(), Some("repo:acme/payments"));
+    let wt = picked.worktree_path.clone().unwrap();
+    let doc = std::fs::read_to_string(wt.join(".openade/pickup.md")).unwrap();
+    assert!(doc.contains("Shared by **casey**"), "{doc}");
+    assert!(doc.contains("originally run on claude-code"), "{doc}");
+    assert!(doc.contains("## Original prompts"), "{doc}");
+    let events = daemon.store().read_transcript(picked.id).unwrap();
+    assert!(events.iter().any(|e| e.kind == EventKind::Prompt
+        && e.payload["text"]
+            .as_str()
+            .is_some_and(|t| t.contains("picking up"))));
+
+    // Bundle read-back: teammates' shared work reaches the next session's
+    // context (needs a catalog for the entity itself).
+    let daemon2 = daemon.with_catalog(Arc::new(
+        catalog_mcp::testutil::MockProvider::with_payments_graph(),
+    ));
+    std::env::set_var("OPENADE_GH_BIN", "/custom/gh");
+    let bundle = daemon2
+        .build_bundle("repo:acme/payments-service", None)
+        .await;
+    // Different entity → workspace entries filtered out, but the doc link
+    // is present whenever a workspace is configured.
+    let bundle = bundle.unwrap();
+    assert!(bundle
+        .docs
+        .iter()
+        .any(|d| d.title.starts_with("Team workspace")));
+    assert!(!bundle
+        .prior_sessions
+        .iter()
+        .any(|p| p.session_id.starts_with("workspace-")));
+    std::env::remove_var("OPENADE_GH_BIN");
+
+    // Matching entity → the shared session becomes prior context. Use the
+    // uploaded record's entity via the workspace list path directly.
+    let sessions = daemon2
+        .workspace_client()
+        .unwrap()
+        .sessions(Some("repo:acme/payments"))
+        .await
+        .unwrap();
+    assert_eq!(sessions.len(), 1);
+
+    // Unconfigured daemon: share fails with instructions; pickup too.
+    for var in [
+        crate::workspace::SERVER_URL_ENV,
+        crate::workspace::SERVER_TOKEN_ENV,
+        crate::workspace::SERVER_WORKSPACE_ENV,
+    ] {
+        std::env::remove_var(var);
+    }
+    let err = daemon2.share(meta.id).await.unwrap_err();
+    assert!(matches!(err, DaemonError::Workspace(_)));
+    let err = daemon2
+        .pickup(PickupRequest {
+            workspace_session_id: shared.id,
+            harness: Harness::ClaudeCode,
+            repo_root: repo.clone(),
+            checkout: CheckoutMode::default(),
+            command_override: Some(sh("true")),
+        })
+        .await
+        .unwrap_err();
+    assert!(matches!(err, DaemonError::Workspace(_)));
 }

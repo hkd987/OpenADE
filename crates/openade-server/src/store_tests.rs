@@ -36,7 +36,10 @@ fn workspaces_and_sessions_round_trip_org_scoped() {
         .create_workspace(DEFAULT_ORG, "Payments", "Everything payments")
         .unwrap();
     assert_eq!(store.workspaces(DEFAULT_ORG).unwrap().len(), 1);
-    assert_eq!(store.workspace(DEFAULT_ORG, ws.id).unwrap().title, "Payments");
+    assert_eq!(
+        store.workspace(DEFAULT_ORG, ws.id).unwrap().title,
+        "Payments"
+    );
     // Wrong org or wrong id → NotFound.
     assert!(matches!(
         store.workspace(2, ws.id),

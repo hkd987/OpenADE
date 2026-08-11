@@ -26,6 +26,12 @@ pub struct Settings {
     pub memory_repo: Option<String>,
     /// Whether first-run onboarding has been completed (or skipped).
     pub onboarded: bool,
+    /// Multiplayer workspace server base URL (self-hosted `openade-server`).
+    pub server_url: Option<String>,
+    /// Member token for the workspace server.
+    pub server_token: Option<String>,
+    /// Workspace id sessions are shared to / read from.
+    pub server_workspace: Option<i64>,
 }
 
 impl Settings {
@@ -79,6 +85,25 @@ impl Settings {
         self.onboarded
             || std::env::var("BACKSTAGE_BASE_URL").is_ok_and(|v| !v.is_empty())
             || std::env::var(crate::memory_repo::MEMORY_REPO_ENV).is_ok_and(|v| !v.is_empty())
+    }
+}
+
+impl Settings {
+    /// The effective multiplayer connection: env overrides
+    /// (`OPENADE_SERVER_URL`/`_TOKEN`/`_WORKSPACE`) win over stored
+    /// settings; all three parts must resolve or multiplayer is off.
+    pub fn effective_workspace(&self) -> Option<crate::workspace::WorkspaceClient> {
+        let env = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
+        let url = env(crate::workspace::SERVER_URL_ENV)
+            .or_else(|| self.server_url.clone().filter(|v| !v.is_empty()))?;
+        let token = env(crate::workspace::SERVER_TOKEN_ENV)
+            .or_else(|| self.server_token.clone().filter(|v| !v.is_empty()))?;
+        let workspace = env(crate::workspace::SERVER_WORKSPACE_ENV)
+            .and_then(|v| v.parse().ok())
+            .or(self.server_workspace)?;
+        Some(crate::workspace::WorkspaceClient::new(
+            url, token, workspace,
+        ))
     }
 }
 
