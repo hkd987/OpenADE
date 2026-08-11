@@ -35,13 +35,25 @@ Claude session — all on catalog entity `component:default/payments-api`.*
 | 14 | `catalog-mcp` binary over stdio vs. mock Backstage | `initialize` handshake; `get_owner` → "Payments Team"; `search_catalog` → payments-api, ledger; `get_techdocs_page` → ADR content |
 | 15 | UI in Chromium (production build via `vite preview`) | Grid renders all sessions/states, terminal attaches and streams, tabs and action buttons work (screenshot above) |
 
+## Native Tauri shell (verified)
+
+After installing WebKitGTK in the container, the native shell was built and
+run under Xvfb against a live daemon — the screenshot below is the actual
+WebKitGTK window (not a browser) showing a running session in the grid:
+
+![Native Tauri shell running](img/tauri-shell-native.png)
+
+| # | Step | Result |
+|---|---|---|
+| 16 | `cargo build` of `apps/desktop/src-tauri` with system WebKitGTK | Compiles clean (icon embedded from `icons/icon.png`) |
+| 17 | Launch `openade-desktop` under Xvfb with no daemon | Window opens; UI renders with the "cannot reach daemon" banner (correct failure mode) |
+| 18 | Launch with a live daemon + session | Grid shows the running session in the native webview (screenshot above) |
+
 ## Not verifiable in this environment
 
 - The real `claude` / `codex` / `gemini` CLIs (no vendor credentials in the
   container) — adapter flags remain gated on the
   [Phase 0 spike](phase-0-spike.md) run on a developer machine.
-- The Tauri native shell (no WebKitGTK in the container) — the UI was
-  verified in Chromium instead; the shell is compile-checked in CI.
 - A production Backstage instance — the REST surface was mocked
   byte-for-byte per the API docs; `wiremock` tests cover the same paths.
 

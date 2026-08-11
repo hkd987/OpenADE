@@ -15,10 +15,9 @@ export function TerminalView({ session }: { session: SessionMeta }) {
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    // The ref is attached before effects run; the guard narrows the type.
     const container = containerRef.current;
-    if (!container) {
-      return;
-    }
+    if (!container) return;
     const term = new Terminal({
       convertEol: true,
       fontSize: 13,
@@ -32,9 +31,7 @@ export function TerminalView({ session }: { session: SessionMeta }) {
     const poll = async () => {
       try {
         const { scrollback } = await getScrollback(session.id);
-        if (cancelled) {
-          return;
-        }
+        if (cancelled) return;
         if (scrollback.length < written) {
           // Daemon restarted or buffer trimmed: redraw from scratch.
           term.reset();

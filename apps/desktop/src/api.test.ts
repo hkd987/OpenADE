@@ -67,6 +67,41 @@ describe("api client", () => {
     );
   });
 
+  it("falls back to the raw body when the error is not JSON", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 502,
+        json: () => Promise.reject(new Error("not json")),
+        text: () => Promise.resolve("bad gateway"),
+      }),
+    );
+    await expect(killSession("abc")).rejects.toThrow("bad gateway");
+
+    // And to the status code when the body is unreadable entirely.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 500,
+        json: () => Promise.reject(new Error("not json")),
+        text: () => Promise.reject(new Error("stream broke")),
+      }),
+    );
+    await expect(killSession("abc")).rejects.toThrow("daemon returned 500");
+  });
+
+  it("fetches scrollback and file listings", async () => {
+    const fetch = mockFetch(200, { scrollback: "out", files: [] });
+    const { getScrollback, getFiles } = await import("./api");
+    await getScrollback("abc");
+    await getFiles("abc");
+    const urls = fetch.mock.calls.map((c) => c[0] as string);
+    expect(urls[0]).toContain("/sessions/abc/scrollback");
+    expect(urls[1]).toContain("/sessions/abc/files");
+  });
+
   it("handles 204 responses without parsing a body", async () => {
     mockFetch(204, undefined);
     await expect(sendInput("abc", "y\n")).resolves.toBeUndefined();

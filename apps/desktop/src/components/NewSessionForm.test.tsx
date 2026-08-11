@@ -50,6 +50,27 @@ describe("NewSessionForm", () => {
     });
   });
 
+  it("tolerates a project-list failure and accepts manual input", async () => {
+    listProjects.mockRejectedValue(new Error("no daemon"));
+    createSession.mockResolvedValue({ id: "manual-1", state: "running" });
+    const onCreated = vi.fn();
+    render(<NewSessionForm onCreated={onCreated} onClose={() => {}} />);
+
+    await userEvent.type(screen.getByTestId("ns-title"), "manual task");
+    await userEvent.type(screen.getByTestId("ns-repo"), "/typed/repo");
+    await userEvent.type(screen.getByTestId("ns-prompt"), "do it carefully");
+    await userEvent.click(screen.getByTestId("ns-submit"));
+
+    await waitFor(() => expect(onCreated).toHaveBeenCalled());
+    expect(createSession).toHaveBeenCalledWith({
+      title: "manual task",
+      harness: "claude-code",
+      repo_root: "/typed/repo",
+      entity_ref: undefined,
+      prompt: "do it carefully",
+    });
+  });
+
   it("shows daemon errors instead of closing", async () => {
     const onCreated = vi.fn();
     createSession.mockRejectedValue(new Error("`/nope` is not a git repository"));

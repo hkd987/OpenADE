@@ -4,9 +4,31 @@ Three layers, all wired into CI (`.github/workflows/ci.yml`):
 
 | Layer | What runs | Command |
 |---|---|---|
-| Rust unit/integration | 101 tests across the workspace — real git repos (worktrees, artifact branches), real PTYs (spawned shells), real HTTP routers (tower `oneshot`), mock Backstage (`wiremock`) | `cargo test` |
-| UI unit | vitest + testing-library: API client, session card, launch form | `cd apps/desktop && npm test` |
-| End-to-end | Playwright drives real Chromium against the real daemon (`cargo run`) and Vite dev server; harness CLIs are shims created per run | `cd apps/desktop && npm run e2e` |
+| Rust unit/integration | 119 tests across the workspace — real git repos (worktrees, artifact branches), real PTYs (spawned shells), real HTTP routers (tower `oneshot`), mock Backstage (`wiremock`), and real fault injection (corrupt SQLite, failing git, truncated HTTP bodies) | `cargo test` |
+| UI unit | vitest + testing-library: API client and every component (App, session card, launch form, session detail, terminal) | `cd apps/desktop && npm test` |
+| End-to-end | 10 Playwright tests drive real Chromium against the real daemon (`cargo run`), a mock Backstage, and the Vite dev server; harness CLIs are shims created per run | `cd apps/desktop && npm run e2e` |
+
+## End-to-end flow matrix
+
+Every user-facing flow has an e2e test (`apps/desktop/e2e/session-flows.spec.ts`):
+
+| Flow | Test |
+|---|---|
+| Daemon health + empty grid | `grid starts empty and the daemon is reachable` |
+| Launch from form → live PTY terminal, prompt pass-through | `launching a session from the form attaches a live terminal` |
+| Diff + file browser views | `diff and file views reflect worktree changes` |
+| Terminal input round-trip | `terminal input reaches the harness process` |
+| Knowledge artifact → review branch | `knowledge artifact lands on a review branch` |
+| Cross-harness handoff, same worktree | `handoff moves the task to another harness…` |
+| Window close/reopen reattach (R1 acceptance) | `reopening the app reattaches sessions with full scrollback` |
+| Entity launch → context bundle + MCP registration + entity filter | `entity-launched sessions carry catalog context` |
+| Needs-input state in the grid | `a session waiting on input shows needs-input in the grid` |
+| Kill → failed state | `killing a session marks it failed in the grid` |
+
+Endpoint-level flows without UI affordances (worktree cleanup with the dirty
+guard, error statuses, entity-filtered listings) are covered end-to-end at
+the HTTP layer inside the Rust suite (`server_tests.rs`) and in the
+[manual pass](manual-e2e.md).
 
 ## Principles
 
@@ -22,29 +44,34 @@ Three layers, all wired into CI (`.github/workflows/ci.yml`):
 
 ## Coverage
 
-Measured with `cargo llvm-cov` (line coverage, binary entrypoints and test
-utilities excluded — `main.rs` files are thin wiring exercised by the e2e
-suite and the manual pass instead):
+**Rust product code: 100% line coverage** (all 1,887 instrumented lines
+across all 15 product source files execute under `cargo test`), measured
+with `cargo llvm-cov` in lcov line accounting:
 
 ```
-cargo llvm-cov --workspace --summary-only --ignore-filename-regex '(main\.rs|testutil\.rs)'
+cargo llvm-cov --workspace \
+  --ignore-filename-regex '(main\.rs|testutil\.rs|_tests\.rs)' \
+  --lcov --output-path cov.lcov
 ```
 
-Snapshot at the time of writing (2026-08-11):
+**UI product code: 100% line and function coverage** (vitest v8, all
+components and the API client; `main.tsx` DOM bootstrap excluded — the
+Playwright suite loads the real bundle).
 
-| Area | Line coverage |
-|---|---|
-| `openade-core` | 96.9% (context 100%, session 100%, harness 98%, rules 90%) |
-| `openade-daemon` | 96.0% (server 97.8%, worktree 97.9%, artifact 99.4%, pty 96.0%, daemon 94.3%, transcript 96.2%) |
-| `catalog-mcp` | 97.8% (provider 100%, mcp 99.0%, backstage 97.7%, bundle 95.6%) |
-| **Workspace total** | **96.9%** |
+Methodology, stated plainly:
 
-The uncovered remainder is almost entirely I/O-failure branches (disk write
-errors, poisoned locks, `tracing` warn arms) that would need fault injection
-to reach; we prefer honest numbers over mocking the filesystem. UI unit
-coverage (vitest v8) is ~89% lines on the unit-tested modules; `App`,
-`SessionDetail`, and `TerminalView` are covered by the Playwright suite
-end-to-end rather than by DOM unit tests.
+- Test modules live in sibling `*_tests.rs` files so the measurement covers
+  product code, not the tests themselves. Binary `main.rs` entrypoints
+  (thin wiring) and the `testutil` mock are excluded and exercised by the
+  e2e suite and the manual pass.
+- Error paths are covered by *real* fault injection, not filesystem mocks:
+  corrupt SQLite files, dropped index tables, colliding files/directories
+  committed into fixture repos, truncated HTTP bodies from a raw socket,
+  unreachable ports, a marker-scoped failing `git` wrapper, and PTY spawns
+  of missing binaries.
+- The remaining sub-line *region* gaps (llvm's stricter accounting) are the
+  never-taken halves of `?`/`&&` operators on executed lines — e.g. the
+  success half of an error-exit that fired, or vice versa.
 
 Manual verification of the assembled system is recorded in
 [manual-e2e.md](manual-e2e.md).

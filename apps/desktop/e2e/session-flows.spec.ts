@@ -122,6 +122,76 @@ test("handoff moves the task to another harness in the same worktree", async ({
   expect(worktrees.size).toBe(1);
 });
 
+test("reopening the app reattaches sessions with full scrollback", async ({
+  page,
+}) => {
+  // R1 acceptance: the UI is just a viewer — closing and reopening it must
+  // reattach every session with its history intact.
+  await page.goto("/");
+  await page.locator(".session-card").first().click();
+  await expect(page.getByTestId("terminal-view")).toContainText(
+    "gemini-shim started",
+  );
+  // "Close the app": navigate away entirely, then come back.
+  await page.goto("about:blank");
+  await page.goto("/");
+  await page.locator(".session-card").first().click();
+  await expect(page.getByTestId("terminal-view")).toContainText(
+    "gemini-shim started",
+  );
+});
+
+test("entity-launched sessions carry catalog context", async ({
+  page,
+  request,
+}) => {
+  await page.goto("/");
+  await page.getByTestId("toggle-new-session").click();
+  await page.getByTestId("ns-title").fill("entity task");
+  await page.getByTestId("ns-repo").fill(repo);
+  await page
+    .getByTestId("ns-entity")
+    .fill("component:default/payments-api");
+  await page.getByTestId("ns-submit").click();
+
+  // The card shows the entity, and the harness rules file received the
+  // context bundle built from the mock Backstage.
+  const card = page.locator(".session-card", { hasText: "entity task" });
+  await expect(card).toContainText("component:default/payments-api");
+
+  const sessions = await (
+    await request.get(`${daemon}/sessions?entity=component:default/payments-api`)
+  ).json();
+  expect(sessions.sessions.length).toBe(1);
+  const worktree = sessions.sessions[0].transcript_path
+    ? // indexed record: fetch live meta for the worktree path
+      (await (await request.get(`${daemon}/sessions/${sessions.sessions[0].id}`)).json())
+        .worktree_path
+    : sessions.sessions[0].worktree_path;
+  const rules = fs.readFileSync(path.join(worktree, "CLAUDE.md"), "utf8");
+  expect(rules).toContain("# System context: Payments API");
+  expect(rules).toContain("Payments Team");
+  // Catalog MCP server auto-registered for the session.
+  expect(fs.existsSync(path.join(worktree, ".mcp.json"))).toBeTruthy();
+});
+
+test("a session waiting on input shows needs-input in the grid", async ({
+  page,
+}) => {
+  await page.goto("/");
+  const card = page.locator(".session-card", { hasText: "entity task" });
+  await card.click();
+  await page.getByTestId("tab-terminal").click();
+  await page.locator(".terminal-container").click();
+  // The shim echoes the line back; the echoed text ends with '?' and then
+  // the PTY goes quiet — the daemon flips the state to needs-input.
+  await page.keyboard.type("May I proceed?");
+  await page.keyboard.press("Enter");
+  await expect(card.locator(".state")).toHaveText("needs-input", {
+    timeout: 20_000,
+  });
+});
+
 test("killing a session marks it failed in the grid", async ({ page }) => {
   await page.goto("/");
   // Select the running (gemini) session.

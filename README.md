@@ -143,10 +143,15 @@ implementation, not a hard dependency.
 ## Testing
 
 ```sh
-cargo test                                        # 101 Rust tests (real git, real PTYs, mock Backstage)
+cargo test                                        # 119 Rust tests (real git, real PTYs, mock Backstage, fault injection)
 cd apps/desktop && npm test                       # UI unit tests (vitest)
-cd apps/desktop && npm run e2e                    # Playwright: real daemon + real Chromium
+cd apps/desktop && npm run e2e                    # 10 Playwright flows: real daemon + mock Backstage + real Chromium
 ```
+
+Product-code line coverage is 100% on both the Rust workspace and the UI —
+methodology and the e2e flow matrix are in [docs/testing.md](docs/testing.md);
+the by-hand verification (including the native Tauri shell under WebKitGTK)
+is in [docs/manual-e2e.md](docs/manual-e2e.md).
 
 CI runs fmt, clippy (`-D warnings`), all three test layers, and a
 Tauri-shell compile check. Releases are built by tagging `v*` (see

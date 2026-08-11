@@ -34,5 +34,6 @@ npm install
 npx @tauri-apps/cli dev     # or: cargo tauri dev
 ```
 
-App icons are not checked in yet (`bundle.active` is `false`); generate them
-with `npx @tauri-apps/cli icon <source.png>` before enabling bundling.
+A placeholder app icon is checked in at `src-tauri/icons/icon.png`
+(`bundle.active` is still `false`); regenerate a real icon set with
+`npx @tauri-apps/cli icon <source.png>` before enabling bundling.

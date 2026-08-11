@@ -53,6 +53,12 @@ export default defineConfig({
   ],
   webServer: [
     {
+      command: "python3 e2e/mock-backstage.py",
+      url: "http://127.0.0.1:7998/",
+      timeout: 30_000,
+      reuseExistingServer: false,
+    },
+    {
       command: "cargo run --quiet -p openade-daemon",
       cwd: path.resolve(__dirname, "../.."),
       url: `http://127.0.0.1:${daemonPort}/health`,
@@ -61,6 +67,8 @@ export default defineConfig({
       env: {
         OPENADE_DAEMON_PORT: String(daemonPort),
         OPENADE_DATA_DIR: path.join(tmpDir, "data"),
+        // The catalog layer talks to the mock Backstage above.
+        BACKSTAGE_BASE_URL: "http://127.0.0.1:7998",
         // Harness shims (claude/codex/gemini) created by global-setup.
         PATH: `${path.join(tmpDir, "bin")}:${process.env.PATH ?? ""}`,
       },

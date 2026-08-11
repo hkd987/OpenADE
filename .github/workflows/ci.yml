@@ -65,11 +65,9 @@ jobs:
 
   tauri-shell:
     # The shell crate needs system webview libraries and is excluded from the
-    # default workspace; keep it compiling without blocking the pipeline while
-    # it is still scaffold-stage.
+    # default workspace; verified against WebKitGTK here.
     name: Tauri shell (cargo check)
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable

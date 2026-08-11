@@ -78,12 +78,12 @@ fn write(path: &Path, content: &str) -> Result<(), RulesError> {
 /// Write the canonical rules source for a project, creating `.openade/`.
 pub fn init_canonical_rules(project_root: &Path, content: &str) -> Result<PathBuf, RulesError> {
     let path = project_root.join(CANONICAL_RULES_PATH);
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|source| RulesError::Io {
-            path: parent.to_path_buf(),
-            source,
-        })?;
-    }
+    // CANONICAL_RULES_PATH nests under the project root, so a parent exists.
+    let parent = path.parent().expect("canonical rules path has a parent");
+    fs::create_dir_all(parent).map_err(|source| RulesError::Io {
+        path: parent.to_path_buf(),
+        source,
+    })?;
     write(&path, content)?;
     Ok(path)
 }
@@ -127,78 +127,5 @@ pub fn materialize_rules(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use tempfile::TempDir;
-
-    fn setup(rules: &str) -> TempDir {
-        let dir = TempDir::new().unwrap();
-        init_canonical_rules(dir.path(), rules).unwrap();
-        dir
-    }
-
-    #[test]
-    fn missing_canonical_is_an_error() {
-        let dir = TempDir::new().unwrap();
-        let err = materialize_rules(dir.path(), &Harness::ALL, false).unwrap_err();
-        assert!(matches!(err, RulesError::MissingCanonical(_)));
-    }
-
-    #[test]
-    fn materializes_all_harness_files() {
-        let dir = setup("Always run tests before committing.\n");
-        let report = materialize_rules(dir.path(), &Harness::ALL, false).unwrap();
-        assert_eq!(report.written.len(), 3);
-        for h in Harness::ALL {
-            let content = fs::read_to_string(dir.path().join(h.rules_filename())).unwrap();
-            assert!(content.contains(GENERATED_MARKER));
-            assert!(content.contains("Always run tests"));
-        }
-    }
-
-    #[test]
-    fn is_idempotent() {
-        let dir = setup("rule\n");
-        materialize_rules(dir.path(), &Harness::ALL, false).unwrap();
-        let second = materialize_rules(dir.path(), &Harness::ALL, false).unwrap();
-        assert!(second.written.is_empty());
-        assert!(second
-            .skipped
-            .iter()
-            .all(|(_, r)| *r == SkipReason::UpToDate));
-    }
-
-    #[test]
-    fn regenerates_when_canonical_changes() {
-        let dir = setup("v1\n");
-        materialize_rules(dir.path(), &Harness::ALL, false).unwrap();
-        init_canonical_rules(dir.path(), "v2\n").unwrap();
-        let report = materialize_rules(dir.path(), &Harness::ALL, false).unwrap();
-        assert_eq!(report.written.len(), 3);
-        let content = fs::read_to_string(dir.path().join("CLAUDE.md")).unwrap();
-        assert!(content.contains("v2"));
-    }
-
-    #[test]
-    fn never_clobbers_hand_written_files_without_force() {
-        let dir = setup("generated rules\n");
-        let hand_written = dir.path().join("CLAUDE.md");
-        fs::write(&hand_written, "my precious hand-written rules\n").unwrap();
-
-        let report = materialize_rules(dir.path(), &[Harness::ClaudeCode], false).unwrap();
-        assert!(report.written.is_empty());
-        assert_eq!(
-            report.skipped,
-            vec![(hand_written.clone(), SkipReason::HandWritten)]
-        );
-        let content = fs::read_to_string(&hand_written).unwrap();
-        assert_eq!(content, "my precious hand-written rules\n");
-
-        // With force, it is overwritten.
-        let report = materialize_rules(dir.path(), &[Harness::ClaudeCode], true).unwrap();
-        assert_eq!(report.written.len(), 1);
-        assert!(fs::read_to_string(&hand_written)
-            .unwrap()
-            .contains(GENERATED_MARKER));
-    }
-}
+#[path = "rules_tests.rs"]
+mod tests;
