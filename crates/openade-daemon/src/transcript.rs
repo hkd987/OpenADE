@@ -33,6 +33,8 @@ pub enum EventKind {
     Diff,
     /// Session state transition.
     StateChange,
+    /// Catalog context injected at launch (the context bundle).
+    Context,
     /// Final outcome (what changed, why — feeds the knowledge artifact).
     Outcome,
 }
@@ -45,6 +47,7 @@ impl EventKind {
             EventKind::Output => "output",
             EventKind::Diff => "diff",
             EventKind::StateChange => "state-change",
+            EventKind::Context => "context",
             EventKind::Outcome => "outcome",
         }
     }

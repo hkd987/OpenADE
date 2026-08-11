@@ -63,8 +63,14 @@ async fn create_session(
     State(daemon): State<Arc<Daemon>>,
     Json(req): Json<LaunchSessionRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
+    // Entity-launched sessions get catalog context (async fetch), degrading
+    // to no bundle when the catalog can't resolve it.
+    let bundle = match &req.entity_ref {
+        Some(entity_ref) => daemon.build_bundle(entity_ref).await,
+        None => None,
+    };
     // PTY spawn + git are blocking; keep the async runtime clean.
-    let meta = tokio::task::spawn_blocking(move || daemon.launch(req))
+    let meta = tokio::task::spawn_blocking(move || daemon.launch(req, bundle))
         .await
         .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))??;
     Ok((StatusCode::CREATED, Json(meta)))

@@ -4,8 +4,11 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
+use catalog_mcp::bundle::build_context_bundle;
+use catalog_mcp::provider::{CatalogProvider, EntityRef};
+use openade_core::context::{ContextBundle, PriorSessionSummary};
 use openade_core::rules;
 use openade_core::session::{SessionMeta, SessionState};
 use openade_core::Harness;
@@ -59,6 +62,7 @@ pub struct Daemon {
     pty: PtyHost,
     store: TranscriptStore,
     sessions: Mutex<HashMap<Uuid, SessionMeta>>,
+    catalog: Option<Arc<dyn CatalogProvider>>,
 }
 
 impl Daemon {
@@ -72,7 +76,20 @@ impl Daemon {
             pty: PtyHost::new(),
             store,
             sessions: Mutex::new(HashMap::new()),
+            catalog: None,
         })
+    }
+
+    /// Attach a catalog provider; sessions launched from an entity get a
+    /// context bundle injected (PRD R5/G2).
+    pub fn with_catalog(mut self, provider: Arc<dyn CatalogProvider>) -> Self {
+        self.catalog = Some(provider);
+        self
+    }
+
+    /// Whether a catalog backend is configured.
+    pub fn has_catalog(&self) -> bool {
+        self.catalog.is_some()
     }
 
     /// The transcript store (read access for API queries).
@@ -91,9 +108,74 @@ impl Daemon {
         )
     }
 
-    /// Launch a session: create the worktree, materialize rules, register
-    /// MCP servers, spawn the harness in a PTY, and start the transcript.
-    pub fn launch(&self, req: LaunchSessionRequest) -> Result<SessionMeta, DaemonError> {
+    /// Build the context bundle for an entity (PRD §7.3): catalog data plus
+    /// summaries of prior OpenADE sessions on the same entity. Returns `None`
+    /// when no catalog is configured or the entity cannot be resolved —
+    /// sessions launch without context rather than failing (degradation is
+    /// recorded in logs).
+    pub async fn build_bundle(&self, entity_ref: &str) -> Option<ContextBundle> {
+        let catalog = self.catalog.as_ref()?;
+        let parsed: EntityRef = match entity_ref.parse() {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::warn!("invalid entity ref {entity_ref:?}: {e}");
+                return None;
+            }
+        };
+        let prior = self.prior_session_summaries(entity_ref);
+        match build_context_bundle(catalog.as_ref(), &parsed, prior).await {
+            Ok(bundle) => Some(bundle),
+            Err(e) => {
+                tracing::warn!("context bundle for {entity_ref} unavailable: {e}");
+                None
+            }
+        }
+    }
+
+    /// Summaries of the most recent sessions on an entity (G3: every session
+    /// makes the next one smarter). Uses the recorded outcome when one
+    /// exists, the session title otherwise.
+    fn prior_session_summaries(&self, entity_ref: &str) -> Vec<PriorSessionSummary> {
+        const MAX_PRIOR: usize = 3;
+        let records = match self.store.sessions_for_entity(entity_ref) {
+            Ok(r) => r,
+            Err(_) => return Vec::new(),
+        };
+        records
+            .into_iter()
+            .take(MAX_PRIOR)
+            .map(|rec| {
+                let summary = self
+                    .store
+                    .read_transcript(rec.id)
+                    .ok()
+                    .and_then(|events| {
+                        events.into_iter().rev().find_map(|e| {
+                            (e.kind == EventKind::Outcome)
+                                .then(|| e.payload.get("summary")?.as_str().map(str::to_string))
+                                .flatten()
+                        })
+                    })
+                    .unwrap_or_else(|| format!("{} ({})", rec.title, rec.state));
+                PriorSessionSummary {
+                    session_id: rec.id.to_string(),
+                    harness: Some(rec.harness),
+                    completed_at: rec.ended_at,
+                    summary,
+                }
+            })
+            .collect()
+    }
+
+    /// Launch a session: create the worktree, materialize rules, inject the
+    /// context bundle, register MCP servers, spawn the harness in a PTY, and
+    /// start the transcript. Build `bundle` with [`Daemon::build_bundle`]
+    /// when launching from a catalog entity.
+    pub fn launch(
+        &self,
+        req: LaunchSessionRequest,
+        bundle: Option<ContextBundle>,
+    ) -> Result<SessionMeta, DaemonError> {
         let mut meta = SessionMeta::new(&req.title, req.harness, &req.repo_root);
         meta.entity_ref = req.entity_ref.clone();
 
@@ -111,11 +193,50 @@ impl Daemon {
             Err(e) => tracing::warn!("rules materialization failed: {e}"),
         }
 
+        // R5/G2: inject the context bundle where the harness will read it —
+        // appended to its rules file — plus machine-readable copies under
+        // .openade/ for tools and handoff.
+        if let Some(bundle) = &bundle {
+            let dot_openade = wt.path.join(".openade");
+            fs::create_dir_all(&dot_openade)?;
+            fs::write(
+                dot_openade.join("context.json"),
+                serde_json::to_string_pretty(bundle).unwrap_or_default(),
+            )?;
+            let markdown = bundle.to_markdown();
+            fs::write(dot_openade.join("context.md"), &markdown)?;
+
+            let rules_file = wt.path.join(req.harness.rules_filename());
+            let mut content = fs::read_to_string(&rules_file).unwrap_or_default();
+            if !content.is_empty() && !content.ends_with('\n') {
+                content.push('\n');
+            }
+            content.push('\n');
+            content.push_str(&markdown);
+            fs::write(&rules_file, content)?;
+        }
+
+        // A configured catalog means entity-launched sessions get the MCP
+        // server registered automatically (deeper retrieval on demand).
+        let mut mcp_servers = req.mcp_servers.clone();
+        if self.catalog.is_some()
+            && req.entity_ref.is_some()
+            && !mcp_servers.iter().any(|s| s.name == "catalog")
+        {
+            mcp_servers.push(McpServerSpec {
+                name: "catalog".into(),
+                transport: crate::adapters::McpTransport::Stdio {
+                    command: "catalog-mcp".into(),
+                    args: vec![],
+                },
+            });
+        }
+
         // R5: register MCP servers. Project-scoped registrations are written
         // into the worktree; user-scoped ones (e.g. Codex's config.toml) are
         // surfaced to the caller instead of silently editing user config.
         let adapter = adapter_for(req.harness);
-        for reg in adapter.mcp_registrations(&wt.path, &req.mcp_servers) {
+        for reg in adapter.mcp_registrations(&wt.path, &mcp_servers) {
             if reg.file.is_relative() {
                 let target = wt.path.join(&reg.file);
                 if let Some(parent) = target.parent() {
@@ -138,7 +259,7 @@ impl Daemon {
         let spec = req.command_override.clone().unwrap_or_else(|| {
             adapter.launch_command(&LaunchRequest {
                 prompt: req.prompt.clone(),
-                mcp_servers: req.mcp_servers.clone(),
+                mcp_servers: mcp_servers.clone(),
             })
         });
         self.pty.spawn(meta.id, &spec, Some(wt.path.clone()))?;
@@ -146,6 +267,13 @@ impl Daemon {
 
         // R6 groundwork: everything is on the record from the first moment.
         self.store.begin_session(&meta)?;
+        if let Some(bundle) = &bundle {
+            self.store.record(
+                meta.id,
+                EventKind::Context,
+                serde_json::to_value(bundle).unwrap_or_default(),
+            )?;
+        }
         if let Some(prompt) = &req.prompt {
             self.store.record(
                 meta.id,
@@ -338,7 +466,7 @@ mod tests {
     fn launch_creates_worktree_runs_and_completes() {
         let (_tmp, daemon, repo) = setup();
         let meta = daemon
-            .launch(launch_req(&repo, "printf session-ok; exit 0"))
+            .launch(launch_req(&repo, "printf session-ok; exit 0"), None)
             .unwrap();
 
         assert_eq!(meta.state, SessionState::Running);
@@ -363,7 +491,7 @@ mod tests {
     #[test]
     fn failing_command_marks_session_failed() {
         let (_tmp, daemon, repo) = setup();
-        let meta = daemon.launch(launch_req(&repo, "exit 3")).unwrap();
+        let meta = daemon.launch(launch_req(&repo, "exit 3"), None).unwrap();
         wait_state(&daemon, meta.id, SessionState::Failed);
     }
 
@@ -371,7 +499,7 @@ mod tests {
     fn parallel_sessions_get_isolated_worktrees() {
         let (_tmp, daemon, repo) = setup();
         let metas: Vec<SessionMeta> = (0..4)
-            .map(|_| daemon.launch(launch_req(&repo, "sleep 20")).unwrap())
+            .map(|_| daemon.launch(launch_req(&repo, "sleep 20"), None).unwrap())
             .collect();
         let paths: std::collections::HashSet<_> = metas
             .iter()
@@ -387,7 +515,7 @@ mod tests {
     #[test]
     fn cleanup_respects_dirty_guard() {
         let (_tmp, daemon, repo) = setup();
-        let meta = daemon.launch(launch_req(&repo, "true")).unwrap();
+        let meta = daemon.launch(launch_req(&repo, "true"), None).unwrap();
         wait_state(&daemon, meta.id, SessionState::Completed);
 
         let wt = meta.worktree_path.clone().unwrap();
@@ -403,7 +531,7 @@ mod tests {
     #[test]
     fn diff_files_and_projects_are_exposed() {
         let (_tmp, daemon, repo) = setup();
-        let meta = daemon.launch(launch_req(&repo, "true")).unwrap();
+        let meta = daemon.launch(launch_req(&repo, "true"), None).unwrap();
         wait_state(&daemon, meta.id, SessionState::Completed);
 
         let wt = meta.worktree_path.clone().unwrap();
@@ -435,10 +563,120 @@ mod tests {
         run(&["add", "."]);
         run(&["commit", "-m", "rules"]);
 
-        let meta = daemon.launch(launch_req(&repo, "true")).unwrap();
+        let meta = daemon.launch(launch_req(&repo, "true"), None).unwrap();
         let wt = meta.worktree_path.unwrap();
         let claude_md = std::fs::read_to_string(wt.join("CLAUDE.md")).unwrap();
         assert!(claude_md.contains("always be testing"));
+    }
+
+    fn daemon_with_catalog(tmp: &TempDir) -> Daemon {
+        Daemon::open(tmp.path().join("data"))
+            .unwrap()
+            .with_catalog(Arc::new(
+                catalog_mcp::testutil::MockProvider::with_payments_graph(),
+            ))
+    }
+
+    #[tokio::test]
+    async fn entity_launch_injects_context_bundle() {
+        let tmp = TempDir::new().unwrap();
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir(&repo).unwrap();
+        init_repo(&repo);
+        let daemon = daemon_with_catalog(&tmp);
+        assert!(daemon.has_catalog());
+
+        let mut req = launch_req(&repo, "true");
+        req.entity_ref = Some("component:default/payments-api".into());
+        let bundle = daemon.build_bundle("component:default/payments-api").await;
+        assert!(bundle.is_some());
+
+        let meta = daemon.launch(req, bundle).unwrap();
+        let wt = meta.worktree_path.clone().unwrap();
+
+        // Injected where the harness reads instructions...
+        let rules = std::fs::read_to_string(wt.join("CLAUDE.md")).unwrap();
+        assert!(rules.contains("Payments API"), "{rules}");
+        assert!(rules.contains("Payments Team"));
+
+        // ...and machine-readable under .openade/.
+        let json: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(wt.join(".openade/context.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            json["entity"]["entity_ref"],
+            "component:default/payments-api"
+        );
+        assert!(wt.join(".openade/context.md").is_file());
+
+        // The catalog MCP server was auto-registered project-scoped.
+        let mcp: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(wt.join(".mcp.json")).unwrap()).unwrap();
+        assert!(mcp["mcpServers"]["catalog"].is_object());
+
+        // And the transcript recorded the injected context.
+        let events = daemon.store().read_transcript(meta.id).unwrap();
+        assert!(events.iter().any(|e| e.kind == EventKind::Context));
+    }
+
+    #[tokio::test]
+    async fn prior_session_outcomes_feed_the_next_bundle() {
+        let tmp = TempDir::new().unwrap();
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir(&repo).unwrap();
+        init_repo(&repo);
+        let daemon = daemon_with_catalog(&tmp);
+
+        // First session on the entity, with a recorded outcome.
+        let mut req = launch_req(&repo, "true");
+        req.entity_ref = Some("component:default/payments-api".into());
+        let first = daemon.launch(req.clone(), None).unwrap();
+        daemon
+            .store()
+            .record(
+                first.id,
+                EventKind::Outcome,
+                serde_json::json!({ "summary": "Added idempotency keys to POST /charges." }),
+            )
+            .unwrap();
+
+        // The next bundle for the same entity carries that knowledge.
+        let bundle = daemon
+            .build_bundle("component:default/payments-api")
+            .await
+            .unwrap();
+        assert_eq!(bundle.prior_sessions.len(), 1);
+        assert!(bundle.prior_sessions[0]
+            .summary
+            .contains("idempotency keys"));
+        assert!(bundle.to_markdown().contains("idempotency keys"));
+    }
+
+    #[tokio::test]
+    async fn unresolvable_entities_degrade_to_no_bundle() {
+        let tmp = TempDir::new().unwrap();
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir(&repo).unwrap();
+        init_repo(&repo);
+        let daemon = daemon_with_catalog(&tmp);
+
+        assert!(daemon
+            .build_bundle("component:default/ghost")
+            .await
+            .is_none());
+        assert!(daemon.build_bundle("not-a-ref").await.is_none());
+
+        // No catalog configured at all → also None, and launches still work.
+        let plain = Daemon::open(tmp.path().join("data2")).unwrap();
+        assert!(plain
+            .build_bundle("component:default/payments-api")
+            .await
+            .is_none());
+        let mut req = launch_req(&repo, "true");
+        req.entity_ref = Some("component:default/ghost".into());
+        let meta = daemon.launch(req, None).unwrap();
+        assert!(meta.worktree_path.is_some());
     }
 
     #[test]
@@ -452,7 +690,7 @@ mod tests {
                 args: vec![],
             },
         }];
-        let meta = daemon.launch(req).unwrap();
+        let meta = daemon.launch(req, None).unwrap();
         let wt = meta.worktree_path.unwrap();
         let mcp_json: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(wt.join(".mcp.json")).unwrap()).unwrap();

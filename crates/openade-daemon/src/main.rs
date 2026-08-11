@@ -22,7 +22,20 @@ async fn main() -> anyhow::Result<()> {
         .and_then(|p| p.parse().ok())
         .unwrap_or(7433);
 
-    let daemon = Arc::new(Daemon::open(&data_dir)?);
+    let mut daemon = Daemon::open(&data_dir)?;
+    // A configured Backstage means entity-launched sessions get context
+    // bundles + catalog MCP registration; without one the daemon is a plain
+    // (still fully functional) session manager.
+    match catalog_mcp::backstage::BackstageConfig::from_env() {
+        Ok(config) => {
+            tracing::info!("catalog: Backstage at {}", config.base_url);
+            daemon = daemon.with_catalog(Arc::new(catalog_mcp::BackstageProvider::new(config)));
+        }
+        Err(_) => {
+            tracing::info!("catalog: none (set BACKSTAGE_BASE_URL to enable context bundles)");
+        }
+    }
+    let daemon = Arc::new(daemon);
     let app = server::router(daemon);
 
     let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));

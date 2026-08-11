@@ -20,6 +20,10 @@ tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 
+[features]
+# In-memory MockProvider for downstream tests (no network).
+mock = []
+
 [dev-dependencies]
 tempfile.workspace = true
 wiremock.workspace = true

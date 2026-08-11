@@ -11,8 +11,8 @@ pub mod backstage;
 pub mod bundle;
 pub mod mcp;
 pub mod provider;
-#[cfg(test)]
-pub(crate) mod testutil;
+#[cfg(any(test, feature = "mock"))]
+pub mod testutil;
 
 pub use backstage::BackstageProvider;
 pub use provider::{CatalogProvider, Entity, EntityRef, ProviderError};
