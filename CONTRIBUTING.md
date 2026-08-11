@@ -34,9 +34,26 @@ daemon or catalog work.
 - **No telemetry, no credential handling.** Don't add code that phones home or
   touches harness credentials; both are hard product commitments (PRD §7.5).
 
+## CI policy: always green
+
+`main` is expected to pass CI at all times. To keep it that way:
+
+- **Reproduce CI locally before pushing.** The toolchain is pinned in
+  `rust-toolchain.toml`, so the exact clippy/rustc CI uses runs on your
+  machine — `cargo fmt --all --check && cargo clippy --all-targets -- -D
+  warnings && cargo test`, plus `npm test && npm run build && npm run e2e`
+  in `apps/desktop`. If it's green locally it's green in CI; there is no
+  version drift to surprise you.
+- **A red run on GitHub is a stop-the-line event.** Pull the failing job's
+  log, reproduce the failure locally, fix it at the root (not by loosening
+  the check), and push the fix. Don't stack unrelated work on a red `main`.
+- **Toolchain bumps are deliberate.** New stable clippy lints arrive by
+  updating `rust-toolchain.toml` in its own commit, fixing whatever the new
+  lints flag in that same commit.
+
 ## Pull requests
 
 - Branch from `main`; keep PRs focused.
-- CI must pass: fmt, clippy `-D warnings`, tests, UI build.
+- CI must pass: fmt, clippy `-D warnings`, tests (unit + e2e), UI build.
 - License: by contributing you agree your contributions are licensed under
   [Apache-2.0](LICENSE).
