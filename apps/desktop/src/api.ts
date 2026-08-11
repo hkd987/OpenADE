@@ -87,6 +87,10 @@ export interface ArtifactInfo {
   file: string;
   summary: string;
   markdown: string;
+  /** Shared memory repo (owner/name) the artifact was also pushed to. */
+  shared_repo?: string;
+  /** Path of the document inside the shared memory repo. */
+  shared_path?: string;
 }
 
 const DAEMON_URL =

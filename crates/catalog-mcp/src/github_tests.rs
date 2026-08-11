@@ -12,6 +12,17 @@ fn provider_with_shim(dir: &Path, script_body: &str) -> GithubProvider {
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(&shim, fs::Permissions::from_mode(0o755)).unwrap();
     }
+    // ETXTBSY hardening: a child forked by a parallel test during the write
+    // above can briefly hold the shim's write fd, failing the first exec
+    // with "Text file busy". Probe until the script is runnable.
+    for _ in 0..100 {
+        match std::process::Command::new(&shim).arg("--probe").output() {
+            Err(e) if e.raw_os_error() == Some(26) => {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            _ => break,
+        }
+    }
     GithubProvider::new(shim)
 }
 
@@ -145,6 +156,35 @@ esac"#,
 }
 
 #[tokio::test]
+async fn codeowners_without_a_global_rule_falls_back_to_the_repo_owner() {
+    let tmp = tempfile::tempdir().unwrap();
+    let provider = provider_with_shim(
+        tmp.path(),
+        r#"case "$*" in
+  "repo view acme/scoped --json"*)
+    printf '{"name":"scoped","owner":{"login":"acme"},"description":"d","url":"https://github.com/acme/scoped","homepageUrl":"","repositoryTopics":[],"primaryLanguage":null,"isArchived":false,"defaultBranchRef":{"name":"main"}}'
+    ;;
+  "api repos/acme/scoped/contents/.github/CODEOWNERS"*)
+    printf 'docs/* @acme/docs-team\n'
+    ;;
+  *)
+    echo "gh: Not Found (HTTP 404)" >&2
+    exit 1
+    ;;
+esac"#,
+    );
+    let entity = provider
+        .get_entity(&"repo:acme/scoped".parse().unwrap())
+        .await
+        .unwrap();
+    // A CODEOWNERS with only path-scoped rules has no repo-wide owner.
+    assert_eq!(
+        entity.relation_targets("ownedBy"),
+        vec!["group:github/acme"]
+    );
+}
+
+#[tokio::test]
 async fn search_maps_results_to_repo_entities() {
     let tmp = tempfile::tempdir().unwrap();
     let provider = fixture_shim(tmp.path());
@@ -217,6 +257,11 @@ async fn gh_failure_modes_map_to_the_error_contract() {
 
     // Unparseable failure → Transport.
     let provider = provider_with_shim(tmp.path(), "echo 'kaboom' >&2; exit 1");
+    let err = provider.search("x", 3).await.unwrap_err();
+    assert!(matches!(err, ProviderError::Transport(_)), "{err:?}");
+
+    // Non-UTF8 stdout on success → Transport.
+    let provider = provider_with_shim(tmp.path(), r"printf '\377\376'");
     let err = provider.search("x", 3).await.unwrap_err();
     assert!(matches!(err, ProviderError::Transport(_)), "{err:?}");
 

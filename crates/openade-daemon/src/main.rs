@@ -39,6 +39,13 @@ async fn main() -> anyhow::Result<()> {
             );
         }
     }
+    // Shared team memory: one repo everyone writes to, straight to its
+    // default branch (OPENADE_MEMORY_REPO=owner/name, pushed via the local
+    // gh CLI). Session knowledge lands there immediately for the whole team.
+    if let Some(memory_repo) = openade_daemon::memory_repo::MemoryRepo::from_env() {
+        tracing::info!("shared memory repo: {}", memory_repo.repo());
+        daemon = daemon.with_memory_repo(memory_repo);
+    }
     let daemon = Arc::new(daemon);
     let app = server::router(daemon);
 

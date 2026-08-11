@@ -342,6 +342,128 @@ fn publish_artifact_commits_to_a_review_branch_without_touching_checkout() {
     assert_eq!(outcome.payload["artifact_branch"], info.branch);
 }
 
+#[test]
+fn publish_artifact_also_pushes_to_the_shared_memory_repo() {
+    let (tmp, daemon, repo) = setup();
+    let shared = crate::memory_repo::tests::repo_with_shim(tmp.path());
+    let daemon = daemon.with_memory_repo(shared);
+
+    let meta = daemon.launch(launch_req(&repo, "true"), None).unwrap();
+    wait_state(&daemon, meta.id, SessionState::Completed);
+    std::fs::write(
+        meta.worktree_path.clone().unwrap().join("README.md"),
+        "hi\nnew feature\n",
+    )
+    .unwrap();
+
+    let info = daemon.publish_artifact(meta.id).unwrap();
+    assert_eq!(info.shared_repo.as_deref(), Some("acme/team-memory"));
+    let shared_path = info.shared_path.clone().unwrap();
+    assert!(shared_path.starts_with("sessions/"), "{shared_path}");
+
+    // The document and the index landed on the shared repo's default branch
+    // (the shim's state dir), with the entity ref threaded into the index.
+    let doc = crate::memory_repo::tests::state_file(tmp.path(), &shared_path);
+    assert!(doc.contains("# Session: test task"), "{doc}");
+    let index = crate::memory_repo::tests::state_file(tmp.path(), "index.md");
+    assert!(index.contains(&format!("]({shared_path})")), "{index}");
+    assert!(index.contains("`component:default/demo`"), "{index}");
+
+    // The outcome records where the shared copy went.
+    let events = daemon.store().read_transcript(meta.id).unwrap();
+    let outcome = events
+        .iter()
+        .rev()
+        .find(|e| e.kind == EventKind::Outcome)
+        .unwrap();
+    assert_eq!(outcome.payload["shared_repo"], "acme/team-memory");
+}
+
+#[test]
+fn shared_memory_push_failure_degrades_to_local_only() {
+    let (tmp, daemon, repo) = setup();
+    // A memory repo whose gh binary doesn't exist: pushes fail, publication
+    // still succeeds locally.
+    let broken =
+        crate::memory_repo::MemoryRepo::new(tmp.path().join("no-such-gh"), "acme/team-memory");
+    let daemon = daemon.with_memory_repo(broken);
+
+    let meta = daemon.launch(launch_req(&repo, "true"), None).unwrap();
+    wait_state(&daemon, meta.id, SessionState::Completed);
+
+    let info = daemon.publish_artifact(meta.id).unwrap();
+    assert!(info.branch.starts_with("openade/knowledge-"));
+    assert!(info.shared_repo.is_none());
+    assert!(info.shared_path.is_none());
+}
+
+#[tokio::test]
+async fn shared_memory_index_entries_enrich_the_bundle() {
+    let tmp = TempDir::new().unwrap();
+    let shared = crate::memory_repo::tests::repo_with_shim(tmp.path());
+    shared
+        .put_file(
+            "index.md",
+            "# Session knowledge index\n\n\
+             - [Newest](sessions/d.md) — most recent *(2026-08-11, claude-code, `component:default/payments-api`)*\n\
+             - [Fix retries](sessions/a.md) — hardened retry loop *(2026-08-10, claude-code, `component:default/payments-api`)*\n\
+             - [Other entity](sessions/b.md) — unrelated *(2026-08-09, codex-cli, `repo:acme/ledger`)*\n\
+             - [No entity](sessions/c.md) — untagged *(2026-08-08, gemini-cli)*\n\
+             - [Oldest](sessions/e.md) — old lesson *(2026-08-01, codex-cli, `component:default/payments-api`)*\n",
+            "memory: seed",
+        )
+        .unwrap();
+    let daemon = daemon_with_catalog(&tmp).with_memory_repo(shared);
+
+    let bundle = daemon
+        .build_bundle("component:default/payments-api")
+        .await
+        .unwrap();
+
+    // The shared repo is linked as documentation...
+    assert!(bundle
+        .docs
+        .iter()
+        .any(|d| d.url == "https://github.com/acme/team-memory"
+            && d.title.contains("acme/team-memory")));
+
+    // ...and entity-matching index lines (capped at 3) become prior-session
+    // context, tagged as team memory.
+    let shared_priors: Vec<&PriorSessionSummary> = bundle
+        .prior_sessions
+        .iter()
+        .filter(|p| p.session_id == "shared-memory")
+        .collect();
+    assert_eq!(shared_priors.len(), 3, "{:?}", bundle.prior_sessions);
+    assert!(shared_priors[0].summary.contains("[Newest]"));
+    assert!(shared_priors[2].summary.contains("[Oldest]"));
+    assert!(!bundle
+        .prior_sessions
+        .iter()
+        .any(|p| p.summary.contains("Other entity") || p.summary.contains("No entity")));
+}
+
+#[tokio::test]
+async fn unreadable_shared_index_still_links_the_memory_repo() {
+    let tmp = TempDir::new().unwrap();
+    // Shim exists but has no index.md yet — reads return None.
+    let shared = crate::memory_repo::tests::repo_with_shim(tmp.path());
+    let daemon = daemon_with_catalog(&tmp).with_memory_repo(shared);
+
+    let bundle = daemon
+        .build_bundle("component:default/payments-api")
+        .await
+        .unwrap();
+    assert!(bundle
+        .docs
+        .iter()
+        .any(|d| d.url == "https://github.com/acme/team-memory"));
+    assert!(!bundle
+        .prior_sessions
+        .iter()
+        .any(|p| p.session_id == "shared-memory"));
+}
+
 fn daemon_with_catalog(tmp: &TempDir) -> Daemon {
     Daemon::open(tmp.path().join("data"))
         .unwrap()

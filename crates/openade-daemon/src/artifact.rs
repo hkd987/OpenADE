@@ -36,6 +36,13 @@ pub struct ArtifactInfo {
     pub summary: String,
     /// Full markdown content.
     pub markdown: String,
+    /// Shared memory repo (`owner/name`) the artifact was also pushed to,
+    /// straight to its default branch, when one is configured.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shared_repo: Option<String>,
+    /// Path of the document inside the shared memory repo.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shared_path: Option<String>,
 }
 
 /// Produces the artifact markdown from what the session left behind.
@@ -175,6 +182,9 @@ pub struct IndexEntry {
     /// ISO date of the session.
     pub date: String,
     pub harness: String,
+    /// Memory entity the session was grounded in, when any — rendered into
+    /// the line so entity-scoped readers (context bundles) can filter.
+    pub entity: Option<String>,
 }
 
 /// Merge a new entry into the (possibly missing) existing index, newest
@@ -191,11 +201,15 @@ pub fn upsert_index(existing: Option<&str>, entry: &IndexEntry) -> String {
         .unwrap_or_default();
     let marker = format!("]({})", entry.file_name);
     lines.retain(|l| !l.contains(&marker));
+    let meta_suffix = match &entry.entity {
+        Some(entity) => format!("{}, {}, `{}`", entry.date, entry.harness, entity),
+        None => format!("{}, {}", entry.date, entry.harness),
+    };
     lines.insert(
         0,
         format!(
-            "- [{}]({}) — {} *({}, {})*",
-            entry.title, entry.file_name, entry.summary, entry.date, entry.harness
+            "- [{}]({}) — {} *({meta_suffix})*",
+            entry.title, entry.file_name, entry.summary
         ),
     );
     format!(

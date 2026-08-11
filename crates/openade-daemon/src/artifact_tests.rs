@@ -97,6 +97,7 @@ fn index_upserts_newest_first_and_replaces_republished_entries() {
         summary: "Added retry logic.".into(),
         date: "2026-08-10".into(),
         harness: "claude-code".into(),
+        entity: None,
     };
     let index = upsert_index(None, &first);
     assert!(index.starts_with("# Session knowledge index"));
@@ -109,6 +110,7 @@ fn index_upserts_newest_first_and_replaces_republished_entries() {
         summary: "Pinned the clock.".into(),
         date: "2026-08-11".into(),
         harness: "gemini-cli".into(),
+        entity: Some("repo:acme/payments".into()),
     };
     let index = upsert_index(Some(&index), &second);
     let fix_pos = index.find("fix flaky test").unwrap();

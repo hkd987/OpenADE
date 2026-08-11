@@ -43,6 +43,12 @@ telemetry, local-first.
   into a markdown artifact committed on an `openade/knowledge-*` review
   branch under `docs/`; once merged it feeds the context bundle of the next
   session on that entity.
+- **Shared team memory** — point `OPENADE_MEMORY_REPO=owner/name` at a repo
+  the whole team has write access to and every published artifact is *also*
+  pushed straight to its default branch (`sessions/<slug>.md` + a living
+  `index.md`) through your local `gh` CLI. Entries there matching a
+  session's entity flow back into the next context bundle — what any
+  teammate learned, everyone's next session knows.
 - **Cross-harness handoff** — move a task Claude → Gemini (any direction) in
   place: same worktree and branch, rules re-materialized, a written handoff
   summary, and the new harness prompted to pick up where the old one left
@@ -76,6 +82,7 @@ OpenADE never touches their credentials.
 #    is installed and authenticated (gh auth login).
 export BACKSTAGE_BASE_URL=https://backstage.example.com   # optional
 export BACKSTAGE_TOKEN=...                                # optional
+export OPENADE_MEMORY_REPO=acme/team-memory               # optional: shared team memory
 openade-daemon
 
 # 2. Launch a session (or use the UI below)
@@ -101,7 +108,9 @@ Environment knobs: `OPENADE_DAEMON_PORT` (default 7433), `OPENADE_DATA_DIR`
 (default `~/.openade` — transcripts, session index, worktrees),
 `BACKSTAGE_BASE_URL` / `BACKSTAGE_TOKEN` (Backstage memory source),
 `OPENADE_GH_BIN` / `OPENADE_GITHUB_MEMORY=0` (GitHub memory source — defaults
-to the `gh` CLI on PATH), `VITE_OPENADE_DAEMON_URL` (UI → daemon).
+to the `gh` CLI on PATH), `OPENADE_MEMORY_REPO=owner/name` (shared team
+memory repo — artifacts are pushed directly to its default branch, so
+everyone on it needs write access), `VITE_OPENADE_DAEMON_URL` (UI → daemon).
 
 ## Architecture
 
@@ -143,7 +152,7 @@ everything else → Backstage) — neither backend is a hard dependency.
 | [ADR-001](docs/adr/ADR-001-desktop-shell.md) | Desktop shell decision (Tauri vs Electron vs TUI) |
 | [catalog-mcp tools](docs/catalog-mcp-tools.md) | MCP tool schemas, auth, design rules |
 | [Phase 0 spike](docs/phase-0-spike.md) | Real-CLI verification plan (the gate to beta) |
-| [Testing & coverage](docs/testing.md) | Test strategy, 96.9% line coverage breakdown |
+| [Testing & coverage](docs/testing.md) | Test strategy, 100% line coverage methodology |
 | [Manual e2e record](docs/manual-e2e.md) | By-hand verification of the assembled system |
 | [Desktop app](apps/desktop/README.md) | UI development and the Tauri shell |
 | [Contributing](CONTRIBUTING.md) | Ground rules and dev setup |
@@ -151,7 +160,7 @@ everything else → Backstage) — neither backend is a hard dependency.
 ## Testing
 
 ```sh
-cargo test                                        # 146 Rust tests (real git, real PTYs, mock Backstage, fake gh, fault injection)
+cargo test                                        # 156 Rust tests (real git, real PTYs, mock Backstage, fake gh, fault injection)
 cd apps/desktop && npm test                       # UI unit tests (vitest)
 cd apps/desktop && npm run e2e                    # 11 Playwright flows: real daemon + mock Backstage + gh shim + real Chromium
 ```

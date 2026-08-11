@@ -4,7 +4,7 @@ Three layers, all wired into CI (`.github/workflows/ci.yml`):
 
 | Layer | What runs | Command |
 |---|---|---|
-| Rust unit/integration | 146 tests across the workspace — real git repos (worktrees, artifact branches), real PTYs (spawned shells), real HTTP routers (tower `oneshot`), mock Backstage (`wiremock`), fake `gh` CLI shims (GitHub memory source), and real fault injection (corrupt SQLite, failing git, truncated HTTP bodies, failing gh) | `cargo test` |
+| Rust unit/integration | 156 tests across the workspace — real git repos (worktrees, artifact branches), real PTYs (spawned shells), real HTTP routers (tower `oneshot`), mock Backstage (`wiremock`), fake `gh` CLI shims (GitHub memory source + a stateful contents-API shim for the shared team memory repo), and real fault injection (corrupt SQLite, failing git, truncated HTTP bodies, failing gh) | `cargo test` |
 | UI unit | vitest + testing-library: API client and every component (App, session card, launch form, session detail, terminal) | `cd apps/desktop && npm test` |
 | End-to-end | 11 Playwright tests drive real Chromium against the real daemon (`cargo run`), a mock Backstage, a `gh` CLI shim, and the Vite dev server; harness CLIs are shims created per run | `cd apps/desktop && npm run e2e` |
 
@@ -18,7 +18,7 @@ Every user-facing flow has an e2e test (`apps/desktop/e2e/session-flows.spec.ts`
 | Launch from form → live PTY terminal, prompt pass-through | `launching a session from the form attaches a live terminal` |
 | Diff + file browser views | `diff and file views reflect worktree changes` |
 | Terminal input round-trip | `terminal input reaches the harness process` |
-| Knowledge artifact → review branch | `knowledge artifact lands on a review branch` |
+| Knowledge artifact → review branch + shared team memory push | `knowledge artifact lands on a review branch` |
 | Cross-harness handoff, same worktree | `handoff moves the task to another harness…` |
 | Window close/reopen reattach (R1 acceptance) | `reopening the app reattaches sessions with full scrollback` |
 | Entity launch → context bundle + MCP registration + entity filter | `entity-launched sessions carry catalog context` |
@@ -45,8 +45,8 @@ the HTTP layer inside the Rust suite (`server_tests.rs`) and in the
 
 ## Coverage
 
-**Rust product code: 100% line coverage** (all 1,887 instrumented lines
-across all 15 product source files execute under `cargo test`), measured
+**Rust product code: 100% line coverage** (all 2,309 instrumented lines
+across all 18 product source files execute under `cargo test`), measured
 with `cargo llvm-cov` in lcov line accounting:
 
 ```

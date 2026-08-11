@@ -71,6 +71,9 @@ export default defineConfig({
         OPENADE_DATA_DIR: path.join(tmpDir, "data"),
         // The catalog layer talks to the mock Backstage above.
         BACKSTAGE_BASE_URL: "http://127.0.0.1:7998",
+        // Shared team memory repo, served by the gh shim's stateful
+        // contents API (state under e2e/.tmp/team-memory).
+        OPENADE_MEMORY_REPO: "acme/team-memory",
         // Harness shims (claude/codex/gemini) created by global-setup.
         PATH: `${path.join(tmpDir, "bin")}:${process.env.PATH ?? ""}`,
       },

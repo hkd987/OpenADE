@@ -81,7 +81,28 @@ describe("SessionDetail", () => {
     await userEvent.click(screen.getByTestId("artifact-button"));
     const banner = await screen.findByTestId("artifact-banner");
     expect(banner).toHaveTextContent("openade/knowledge-x");
+    // No shared memory repo configured — no team-memory link.
+    expect(screen.queryByTestId("shared-memory-link")).toBeNull();
     expect(onChanged).toHaveBeenCalled();
+  });
+
+  it("links the shared team memory copy when the artifact was pushed there", async () => {
+    publishArtifact.mockResolvedValue({
+      branch: "openade/knowledge-x",
+      file: "docs/openade/sessions/x.md",
+      summary: "s",
+      markdown: "# S",
+      shared_repo: "acme/team-memory",
+      shared_path: "sessions/x.md",
+    });
+    render(<SessionDetail session={session} onChanged={vi.fn()} />);
+    await userEvent.click(screen.getByTestId("artifact-button"));
+    const link = await screen.findByTestId("shared-memory-link");
+    expect(link).toHaveTextContent("acme/team-memory");
+    expect(link).toHaveAttribute(
+      "href",
+      "https://github.com/acme/team-memory/blob/HEAD/sessions/x.md",
+    );
   });
 
   it("hands off to the selected harness and selects the new session", async () => {

@@ -58,13 +58,44 @@ export default function prepareWorld() {
     fs.chmodSync(shim, 0o755);
   }
 
+  // Shared team memory repo state: the gh shim implements the GitHub
+  // contents API for acme/team-memory against this directory, so the
+  // daemon's direct-to-main knowledge pushes are observable on disk.
+  const teamMemory = path.join(tmpDir, "team-memory");
+  fs.mkdirSync(teamMemory, { recursive: true });
+
   // gh shim: stands in for the user's authenticated GitHub CLI, serving the
   // repo:acme/checkout-service fixture (the daemon auto-detects it on PATH).
   const gh = path.join(bin, "gh");
   fs.writeFileSync(
     gh,
     `#!/bin/sh
+STATE="${teamMemory}"
 case "$*" in
+  "api -X PUT repos/acme/team-memory/contents/"*)
+    file="\${4#repos/acme/team-memory/contents/}"
+    if [ -e "$STATE/$file" ]; then
+      case "$*" in
+        *" sha="*) ;;
+        *) echo 'gh: Invalid request. sha was not supplied. (HTTP 422)' >&2; exit 1 ;;
+      esac
+    fi
+    mkdir -p "$STATE/$(dirname "$file")"
+    printf '%s' "\${8#content=}" | base64 -d > "$STATE/$file"
+    printf '{"content":{"path":"%s"}}' "$file"
+    ;;
+  "api repos/acme/team-memory/contents/"*" -H Accept: application/vnd.github.raw")
+    file="\${2#repos/acme/team-memory/contents/}"
+    if [ -e "$STATE/$file" ]; then cat "$STATE/$file"; else echo 'gh: Not Found (HTTP 404)' >&2; exit 1; fi
+    ;;
+  "api repos/acme/team-memory/contents/"*)
+    file="\${2#repos/acme/team-memory/contents/}"
+    if [ -e "$STATE/$file" ]; then
+      printf '{"sha":"%s"}' "$(cksum "$STATE/$file" | cut -d' ' -f1)"
+    else
+      echo 'gh: Not Found (HTTP 404)' >&2; exit 1
+    fi
+    ;;
   "repo view acme/checkout-service --json"*)
     printf '{"name":"checkout-service","owner":{"login":"acme"},"description":"Checkout flow service for the acme shop.","url":"https://github.com/acme/checkout-service","homepageUrl":"","repositoryTopics":[{"name":"checkout"}],"primaryLanguage":{"name":"Go"},"isArchived":false,"defaultBranchRef":{"name":"main"}}'
     ;;

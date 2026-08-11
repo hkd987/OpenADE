@@ -37,6 +37,15 @@ fn find_on_path(program: &str) -> Option<PathBuf> {
         .find(|candidate| candidate.is_file())
 }
 
+/// Resolve the `gh` binary the way every gh-backed feature does:
+/// `OPENADE_GH_BIN` override first, then PATH.
+pub fn resolve_gh_bin() -> Option<PathBuf> {
+    if let Some(bin) = std::env::var_os("OPENADE_GH_BIN").filter(|v| !v.is_empty()) {
+        return Some(PathBuf::from(bin));
+    }
+    find_on_path("gh")
+}
+
 impl GithubProvider {
     pub fn new(gh_bin: impl Into<PathBuf>) -> Self {
         GithubProvider {
@@ -51,10 +60,7 @@ impl GithubProvider {
         if std::env::var("OPENADE_GITHUB_MEMORY").as_deref() == Ok("0") {
             return Err("github memory source disabled (OPENADE_GITHUB_MEMORY=0)".into());
         }
-        if let Some(bin) = std::env::var_os("OPENADE_GH_BIN").filter(|v| !v.is_empty()) {
-            return Ok(GithubProvider::new(PathBuf::from(bin)));
-        }
-        find_on_path("gh").map(GithubProvider::new).ok_or_else(|| {
+        resolve_gh_bin().map(GithubProvider::new).ok_or_else(|| {
             "gh CLI not found on PATH (install GitHub CLI and run `gh auth login` \
              to enable the GitHub memory source)"
                 .into()
@@ -152,11 +158,9 @@ pub fn parse_codeowners(content: &str) -> Vec<String> {
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
+        // The line is trimmed and non-empty, so a first token always exists.
         let mut parts = line.split_whitespace();
-        let Some(pattern) = parts.next() else {
-            continue;
-        };
-        if pattern == "*" {
+        if parts.next() == Some("*") {
             global = parts.map(str::to_string).collect();
         }
     }

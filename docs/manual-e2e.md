@@ -11,9 +11,11 @@ real Chromium.
 
 ![OpenADE UI during the manual pass](img/manual-e2e-ui.png)
 
-*The grid above (captured during this pass) shows the three states exercised:
-a Codex session waiting on input, a killed Gemini session, and the completed
-Claude session — all on catalog entity `component:default/payments-api`.*
+*The grid above (captured during this pass) shows the three states exercised —
+a Codex session waiting on input, a killed Gemini session, and a completed
+Claude session — across both memory sources (`component:default/payments-api`
+chips and a green `repo:acme/checkout-service` chip), with the compact
+Handoff / Artifact / Kill actions in the detail header.*
 
 ## Checklist and observed results
 
@@ -62,6 +64,20 @@ screenshot above is from this pass — both memory chips visible.
 | 21 | Backstage regression | `component:default/payments-api` session still injects "Payments Team" (Gemini rules file) |
 | 22 | `catalog-mcp` stdio with both sources | `get_owner(repo:…)` → team + user from CODEOWNERS; `get_techdocs_page(README.md)` → file content via `gh api`; `search_catalog("checkout")` → results from **both** sources merged; `get_entity(component:…)` still served by Backstage |
 | 23 | UI memory chips | Grid shows `component`-chip and green `repo`-chip cards side by side (screenshot above) |
+
+## Shared team memory repo (verified)
+
+Run on 2026-08-11 against the release daemon with
+`OPENADE_MEMORY_REPO=acme/team-memory` set and a stateful `gh` shim standing
+in for the GitHub contents API (writes land in a state directory, sha
+required for updates — same contract as api.github.com).
+
+| # | Step | Result |
+|---|---|---|
+| 24 | Daemon startup | Log shows `shared memory repo: acme/team-memory` alongside the memory sources |
+| 25 | Artifact publication | `POST /sessions/{id}/artifact` response carries `shared_repo: acme/team-memory` + `shared_path: sessions/2026-08-11-…md`; the shim state shows the session document **and** a regenerated `index.md` (newest-first, entity ref in the entry) committed straight to the default branch |
+| 26 | Knowledge loop across the team | A follow-up session on `repo:acme/checkout-service` got the shared entry under "Prior sessions on this entity" (tagged `shared-memory`) plus a "Shared team memory (acme/team-memory)" doc link in `CLAUDE.md` and `.openade/context.json` |
+| 27 | Degradation | With the `gh` binary removed, publication still succeeds locally (review branch) and the response has no `shared_*` fields — covered by unit tests and re-checked by hand |
 
 ## Not verifiable in this environment
 

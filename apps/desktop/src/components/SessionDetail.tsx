@@ -90,7 +90,7 @@ export function SessionDetail({
             }
             data-testid="handoff-button"
           >
-            Hand off
+            Handoff
           </button>
           <button
             disabled={busy}
@@ -102,7 +102,7 @@ export function SessionDetail({
             }
             data-testid="artifact-button"
           >
-            Knowledge artifact
+            Artifact
           </button>
           <button
             disabled={busy}
@@ -129,6 +129,21 @@ export function SessionDetail({
         <div className="artifact-banner" data-testid="artifact-banner">
           Knowledge artifact committed to branch <code>{artifact.branch}</code>{" "}
           (<code>{artifact.file}</code>) — review and merge to publish.
+          {artifact.shared_repo && (
+            <>
+              {" "}
+              Also pushed to team memory{" "}
+              <a
+                href={`https://github.com/${artifact.shared_repo}/blob/HEAD/${artifact.shared_path}`}
+                target="_blank"
+                rel="noreferrer"
+                data-testid="shared-memory-link"
+              >
+                {artifact.shared_repo}
+              </a>
+              .
+            </>
+          )}
         </div>
       )}
 

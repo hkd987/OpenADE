@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 
 use catalog_mcp::bundle::build_context_bundle;
 use catalog_mcp::provider::{CatalogProvider, EntityRef};
-use openade_core::context::{ContextBundle, PriorSessionSummary};
+use openade_core::context::{ContextBundle, DocLink, PriorSessionSummary};
 use openade_core::rules;
 use openade_core::session::{SessionMeta, SessionState};
 use openade_core::Harness;
@@ -16,6 +16,7 @@ use uuid::Uuid;
 
 use crate::adapters::{adapter_for, LaunchRequest, McpServerSpec};
 use crate::artifact::ArtifactInfo;
+use crate::memory_repo::MemoryRepo;
 use crate::pty::{CommandSpec, PtyError, PtyHost};
 use crate::transcript::{EventKind, TranscriptError, TranscriptStore};
 use crate::worktree::{WorktreeError, WorktreeManager};
@@ -80,6 +81,7 @@ pub struct Daemon {
     store: TranscriptStore,
     sessions: Mutex<HashMap<Uuid, SessionMeta>>,
     catalog: Option<Arc<dyn CatalogProvider>>,
+    memory_repo: Option<MemoryRepo>,
 }
 
 impl Daemon {
@@ -94,6 +96,7 @@ impl Daemon {
             store,
             sessions: Mutex::new(HashMap::new()),
             catalog: None,
+            memory_repo: None,
         })
     }
 
@@ -107,6 +110,14 @@ impl Daemon {
     /// Whether a catalog backend is configured.
     pub fn has_catalog(&self) -> bool {
         self.catalog.is_some()
+    }
+
+    /// Attach a shared team memory repository: published knowledge is also
+    /// committed straight to its default branch, and its index feeds
+    /// entity context bundles.
+    pub fn with_memory_repo(mut self, memory_repo: MemoryRepo) -> Self {
+        self.memory_repo = Some(memory_repo);
+        self
     }
 
     /// The transcript store (read access for API queries).
@@ -141,11 +152,48 @@ impl Daemon {
         };
         let prior = self.prior_session_summaries(entity_ref);
         match build_context_bundle(catalog.as_ref(), &parsed, prior).await {
-            Ok(bundle) => Some(bundle),
+            Ok(mut bundle) => {
+                self.add_shared_memory(&mut bundle, entity_ref).await;
+                Some(bundle)
+            }
             Err(e) => {
                 tracing::warn!("context bundle for {entity_ref} unavailable: {e}");
                 None
             }
+        }
+    }
+
+    /// Fold the shared team memory repo into a bundle: recent index entries
+    /// mentioning this entity become prior-session context (what teammates
+    /// already learned), and the repo itself is linked as documentation.
+    /// Read failures degrade silently — shared memory never blocks a launch.
+    async fn add_shared_memory(&self, bundle: &mut ContextBundle, entity_ref: &str) {
+        const MAX_SHARED: usize = 3;
+        let Some(memory_repo) = self.memory_repo.clone() else {
+            return;
+        };
+        bundle.docs.push(DocLink {
+            title: format!("Shared team memory ({})", memory_repo.repo()),
+            url: memory_repo.html_url(),
+        });
+        let reader = memory_repo.clone();
+        let index = tokio::task::spawn_blocking(move || reader.read_file("index.md"))
+            .await
+            .ok()
+            .flatten();
+        let Some(index) = index else { return };
+        let marker = format!("`{entity_ref}`");
+        for line in index
+            .lines()
+            .filter(|l| l.starts_with("- [") && l.contains(&marker))
+            .take(MAX_SHARED)
+        {
+            bundle.prior_sessions.push(PriorSessionSummary {
+                session_id: "shared-memory".to_string(),
+                harness: None,
+                completed_at: None,
+                summary: line.trim_start_matches("- ").to_string(),
+            });
         }
     }
 
@@ -607,16 +655,15 @@ impl Daemon {
         let mgr = self.worktree_manager(&meta.repo_root);
         let index_rel = PathBuf::from(crate::artifact::INDEX_FILE);
         let existing_index = mgr.read_file_at("HEAD", &index_rel).ok();
-        let index = crate::artifact::upsert_index(
-            existing_index.as_deref(),
-            &crate::artifact::IndexEntry {
-                file_name: format!("{slug}.md"),
-                title: meta.title.clone(),
-                summary: summary.clone(),
-                date: meta.created_at.format("%Y-%m-%d").to_string(),
-                harness: meta.harness.id().to_string(),
-            },
-        );
+        let entry = crate::artifact::IndexEntry {
+            file_name: format!("{slug}.md"),
+            title: meta.title.clone(),
+            summary: summary.clone(),
+            date: meta.created_at.format("%Y-%m-%d").to_string(),
+            harness: meta.harness.id().to_string(),
+            entity: meta.entity_ref.clone(),
+        };
+        let index = crate::artifact::upsert_index(existing_index.as_deref(), &entry);
         mgr.commit_files_on_branch(
             &branch,
             &[
@@ -626,6 +673,34 @@ impl Daemon {
             &format!("docs: session knowledge — {}", meta.title),
         )?;
 
+        // Shared team memory: also push the document + index straight to the
+        // configured memory repo's default branch (everyone has write access
+        // — no review gate there by design). Failure degrades to local-only.
+        let mut shared_repo = None;
+        let mut shared_path = None;
+        if let Some(memory_repo) = &self.memory_repo {
+            let shared_file = format!("sessions/{slug}.md");
+            let shared_entry = crate::artifact::IndexEntry {
+                file_name: shared_file.clone(),
+                ..entry.clone()
+            };
+            let shared_index = crate::artifact::upsert_index(
+                memory_repo.read_file("index.md").as_deref(),
+                &shared_entry,
+            );
+            let message = format!("memory: {} — {}", meta.title, summary);
+            match memory_repo.publish(&shared_file, &markdown, &shared_index, &message) {
+                Ok(()) => {
+                    shared_repo = Some(memory_repo.repo().to_string());
+                    shared_path = Some(shared_file);
+                }
+                Err(e) => {
+                    let repo = memory_repo.repo();
+                    tracing::warn!("shared memory push to {repo} failed (kept locally): {e}");
+                }
+            }
+        }
+
         // The artifact is already committed; a transcript hiccup is not fatal.
         self.record_event(
             id,
@@ -634,6 +709,8 @@ impl Daemon {
                 "summary": summary,
                 "artifact_branch": branch,
                 "artifact_file": file,
+                "shared_repo": shared_repo,
+                "shared_path": shared_path,
             }),
         );
 
@@ -642,6 +719,8 @@ impl Daemon {
             file,
             summary,
             markdown,
+            shared_repo,
+            shared_path,
         })
     }
 }

@@ -91,6 +91,24 @@ test("knowledge artifact lands on a review branch", async ({ page }) => {
   await expect(banner).toBeVisible();
   await expect(banner).toContainText("openade/knowledge-");
   await expect(banner).toContainText("docs/openade/sessions/");
+
+  // Shared team memory: the artifact was also pushed straight to the
+  // configured memory repo's default branch (gh shim state on disk).
+  const sharedLink = page.getByTestId("shared-memory-link");
+  await expect(sharedLink).toBeVisible();
+  await expect(sharedLink).toContainText("acme/team-memory");
+
+  const teamMemory = path.resolve(__dirname, ".tmp/team-memory");
+  const index = fs.readFileSync(path.join(teamMemory, "index.md"), "utf8");
+  expect(index).toContain("# Session knowledge index");
+  const sessionDocs = fs.readdirSync(path.join(teamMemory, "sessions"));
+  expect(sessionDocs.length).toBeGreaterThan(0);
+  const doc = fs.readFileSync(
+    path.join(teamMemory, "sessions", sessionDocs[0]),
+    "utf8",
+  );
+  expect(doc).toContain("# Session:");
+  expect(index).toContain(`](sessions/${sessionDocs[0]})`);
 });
 
 test("handoff moves the task to another harness in the same worktree", async ({

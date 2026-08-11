@@ -8,6 +8,7 @@
 pub mod adapters;
 pub mod artifact;
 pub mod daemon;
+pub mod memory_repo;
 pub mod pty;
 pub mod server;
 pub mod transcript;

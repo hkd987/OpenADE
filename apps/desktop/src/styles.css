@@ -275,10 +275,16 @@ button {
   color: #fff;
   border: none;
   border-radius: 6px;
-  padding: 6px 12px;
+  padding: 4px 10px;
   font: inherit;
-  font-size: 13px;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: nowrap;
   cursor: pointer;
+}
+
+button:hover:not(:disabled) {
+  filter: brightness(1.12);
 }
 
 button:disabled {
@@ -375,6 +381,20 @@ button.danger {
   display: flex;
   gap: 6px;
   align-items: center;
+  flex-shrink: 0;
+}
+
+/* Header actions stay quiet: only Kill carries color; the workflow
+   buttons are outlined so the row reads as one compact toolbar. */
+.detail-actions button:not(.danger) {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  color: var(--text);
+}
+
+.detail-actions button:not(.danger):hover:not(:disabled) {
+  border-color: var(--accent);
+  filter: none;
 }
 
 .detail-actions select {
@@ -382,8 +402,9 @@ button.danger {
   border: 1px solid var(--border);
   border-radius: 6px;
   color: var(--text);
-  padding: 5px 6px;
+  padding: 4px 6px;
   font-size: 12px;
+  max-width: 110px;
 }
 
 .artifact-banner {
