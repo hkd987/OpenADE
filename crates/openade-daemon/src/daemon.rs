@@ -42,6 +42,20 @@ pub struct LaunchSessionRequest {
     pub command_override: Option<CommandSpec>,
 }
 
+/// Request to hand a session's task to a different harness (P1/G4:
+/// switch harness mid-task without losing working state).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct HandoffRequest {
+    /// The harness taking over.
+    pub harness: Harness,
+    /// Extra instruction appended to the handoff prompt.
+    #[serde(default)]
+    pub prompt: Option<String>,
+    /// Testing/backdoor, as in [`LaunchSessionRequest`].
+    #[serde(default)]
+    pub command_override: Option<CommandSpec>,
+}
+
 /// Errors from the daemon's session lifecycle.
 #[derive(Debug, thiserror::Error)]
 pub enum DaemonError {
@@ -53,6 +67,8 @@ pub enum DaemonError {
     Transcript(#[from] TranscriptError),
     #[error("no such session: {0}")]
     NotFound(Uuid),
+    #[error("cannot hand off session {0}: {1}")]
+    Handoff(Uuid, String),
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
 }
@@ -296,12 +312,17 @@ impl Daemon {
         Ok(meta)
     }
 
-    /// Refresh a session's state from its PTY (running → completed/failed
-    /// when the process exits) and return the up-to-date metadata.
+    /// Refresh a session's state from its PTY (running → completed/failed on
+    /// exit, running ↔ needs-input from prompt detection) and return the
+    /// up-to-date metadata.
     pub fn get(&self, id: Uuid) -> Result<SessionMeta, DaemonError> {
+        /// Silence required before prompt detection may flip a session to
+        /// `needs-input` — agents redraw constantly while working.
+        const NEEDS_INPUT_QUIESCENCE: std::time::Duration = std::time::Duration::from_millis(1000);
+
         let mut sessions = self.sessions.lock().expect("sessions lock");
         let meta = sessions.get_mut(&id).ok_or(DaemonError::NotFound(id))?;
-        if meta.state == SessionState::Running {
+        if matches!(meta.state, SessionState::Running | SessionState::NeedsInput) {
             if let Ok(pty) = self.pty.get(id) {
                 if pty.has_exited() {
                     let state = match pty.exit_code() {
@@ -310,6 +331,19 @@ impl Daemon {
                     };
                     meta.set_state(state);
                     let _ = self.store.end_session(id, state);
+                } else {
+                    // R1: surface waiting-on-input in the grid.
+                    let awaiting = pty.idle_for() >= NEEDS_INPUT_QUIESCENCE
+                        && crate::pty::looks_like_awaiting_input(&pty.tail(512));
+                    let state = if awaiting {
+                        SessionState::NeedsInput
+                    } else {
+                        SessionState::Running
+                    };
+                    if meta.state != state {
+                        meta.set_state(state);
+                        let _ = self.store.update_state(id, state);
+                    }
                 }
             }
         }
@@ -396,6 +430,125 @@ impl Daemon {
     /// Repositories sessions have been launched in (R3 project list).
     pub fn projects(&self) -> Result<Vec<PathBuf>, DaemonError> {
         Ok(self.store.projects()?)
+    }
+
+    /// Hand a task to a different harness (P1/G4). The worktree, branch, and
+    /// entity carry over; the new harness starts from a written handoff
+    /// summary (`.openade/handoff.md`) of everything done so far. The old
+    /// session is ended and both transcripts record the handoff.
+    pub fn handoff(&self, id: Uuid, req: HandoffRequest) -> Result<SessionMeta, DaemonError> {
+        use crate::artifact::{Summarizer, TemplateSummarizer};
+
+        let old = self.get(id)?;
+        let Some(wt_path) = old.worktree_path.clone() else {
+            return Err(DaemonError::Handoff(id, "session has no worktree".into()));
+        };
+        if !wt_path.is_dir() {
+            return Err(DaemonError::Handoff(id, "worktree no longer exists".into()));
+        }
+
+        // Working-state summary before we touch anything.
+        let events = self.store.read_transcript(id)?;
+        let diff = self.diff(id)?;
+        let summarizer = TemplateSummarizer;
+        let summary_line = summarizer.summary_line(&old, &events, &diff);
+        let handoff_doc = summarizer.summarize(&old, &events, &diff);
+
+        // End the old session (best effort if the PTY already exited).
+        let _ = self.pty.remove(id);
+        {
+            let mut sessions = self.sessions.lock().expect("sessions lock");
+            if let Some(meta) = sessions.get_mut(&id) {
+                if !meta.state.is_terminal() {
+                    meta.set_state(SessionState::Completed);
+                    let _ = self.store.end_session(id, SessionState::Completed);
+                }
+            }
+        }
+
+        // Carry state over on disk: handoff doc, rules for the new harness,
+        // and the entity context bundle if the session had one.
+        let dot_openade = wt_path.join(".openade");
+        fs::create_dir_all(&dot_openade)?;
+        fs::write(dot_openade.join("handoff.md"), &handoff_doc)?;
+        match rules::materialize_rules(&wt_path, &[req.harness], false) {
+            Ok(_) | Err(rules::RulesError::MissingCanonical(_)) => {}
+            Err(e) => tracing::warn!("rules materialization failed: {e}"),
+        }
+        let context_md = dot_openade.join("context.md");
+        if context_md.is_file() {
+            let bundle_md = fs::read_to_string(&context_md)?;
+            let rules_file = wt_path.join(req.harness.rules_filename());
+            let mut content = fs::read_to_string(&rules_file).unwrap_or_default();
+            if !content.contains("# System context:") {
+                if !content.is_empty() && !content.ends_with('\n') {
+                    content.push('\n');
+                }
+                content.push('\n');
+                content.push_str(&bundle_md);
+                fs::write(&rules_file, content)?;
+            }
+        }
+
+        // New session, same task.
+        let mut meta = SessionMeta::new(&old.title, req.harness, &old.repo_root);
+        meta.worktree_path = Some(wt_path.clone());
+        meta.branch = old.branch.clone();
+        meta.base_commit = old.base_commit.clone();
+        meta.entity_ref = old.entity_ref.clone();
+
+        let mut prompt = format!(
+            "You are taking over the task \"{}\" from {}. Read .openade/handoff.md \
+             for what has been done so far. Current status: {}",
+            old.title,
+            old.harness.display_name(),
+            summary_line
+        );
+        if let Some(extra) = &req.prompt {
+            prompt.push(' ');
+            prompt.push_str(extra);
+        }
+
+        let adapter = adapter_for(req.harness);
+        let spec = req.command_override.clone().unwrap_or_else(|| {
+            adapter.launch_command(&LaunchRequest {
+                prompt: Some(prompt.clone()),
+                mcp_servers: vec![],
+            })
+        });
+        self.pty.spawn(meta.id, &spec, Some(wt_path))?;
+        meta.set_state(SessionState::Running);
+
+        self.store.begin_session(&meta)?;
+        self.store.record(
+            meta.id,
+            EventKind::StateChange,
+            serde_json::json!({
+                "state": "running",
+                "handoff_from": id,
+                "previous_harness": old.harness.id(),
+            }),
+        )?;
+        self.store.record(
+            meta.id,
+            EventKind::Prompt,
+            serde_json::json!({ "text": prompt }),
+        )?;
+        self.store.update_state(meta.id, SessionState::Running)?;
+        self.store.record(
+            id,
+            EventKind::Outcome,
+            serde_json::json!({
+                "summary": format!("Handed off to {} (session {})", req.harness.display_name(), meta.id),
+                "handoff_to": meta.id,
+            }),
+        )?;
+
+        self.sessions
+            .lock()
+            .expect("sessions lock")
+            .insert(meta.id, meta.clone());
+        Ok(meta)
     }
 
     /// Produce the session's knowledge artifact (R6): summarize the
@@ -613,6 +766,108 @@ mod tests {
         let wt = meta.worktree_path.unwrap();
         let claude_md = std::fs::read_to_string(wt.join("CLAUDE.md")).unwrap();
         assert!(claude_md.contains("always be testing"));
+    }
+
+    #[tokio::test]
+    async fn handoff_carries_worktree_and_context_to_the_new_harness() {
+        let tmp = TempDir::new().unwrap();
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir(&repo).unwrap();
+        init_repo(&repo);
+        let daemon = daemon_with_catalog(&tmp);
+
+        // Entity-launched Claude session that did some work.
+        let mut req = launch_req(&repo, "sleep 30");
+        req.entity_ref = Some("component:default/payments-api".into());
+        let bundle = daemon.build_bundle("component:default/payments-api").await;
+        let old = daemon.launch(req, bundle).unwrap();
+        let wt = old.worktree_path.clone().unwrap();
+        std::fs::write(wt.join("README.md"), "hi\nwork in progress\n").unwrap();
+
+        // Hand off to Gemini; the override prints the handoff doc so we can
+        // verify the new session actually sees it.
+        let new = daemon
+            .handoff(
+                old.id,
+                HandoffRequest {
+                    harness: Harness::GeminiCli,
+                    prompt: Some("Finish the remaining edge cases.".into()),
+                    command_override: Some(sh("cat .openade/handoff.md")),
+                },
+            )
+            .unwrap();
+
+        // Same task, same working state, new harness.
+        assert_eq!(new.harness, Harness::GeminiCli);
+        assert_eq!(new.worktree_path.as_ref(), Some(&wt));
+        assert_eq!(new.branch, old.branch);
+        assert_eq!(new.entity_ref, old.entity_ref);
+        assert_ne!(new.id, old.id);
+
+        // Old session ended; registry shows both.
+        assert!(daemon.get(old.id).unwrap().state.is_terminal());
+        assert_eq!(daemon.list().len(), 2);
+
+        // Handoff doc captures the work; entity context re-attached for the
+        // new harness's rules file.
+        let handoff = std::fs::read_to_string(wt.join(".openade/handoff.md")).unwrap();
+        assert!(handoff.contains("README.md"), "{handoff}");
+        let gemini_rules = std::fs::read_to_string(wt.join("GEMINI.md")).unwrap();
+        assert!(gemini_rules.contains("Payments API"));
+
+        // The new session's PTY really read the handoff doc.
+        wait_state(&daemon, new.id, SessionState::Completed);
+        assert!(daemon.scrollback(new.id).unwrap().contains("# Session:"));
+
+        // Both transcripts record the handoff.
+        let new_events = daemon.store().read_transcript(new.id).unwrap();
+        assert!(new_events
+            .iter()
+            .any(|e| e.payload.get("handoff_from").is_some()));
+        let old_events = daemon.store().read_transcript(old.id).unwrap();
+        assert!(old_events
+            .iter()
+            .any(|e| e.payload.get("handoff_to").is_some()));
+    }
+
+    #[test]
+    fn handoff_without_worktree_is_rejected() {
+        let (_tmp, daemon, repo) = setup();
+        let meta = daemon.launch(launch_req(&repo, "true"), None).unwrap();
+        // Simulate a lost worktree.
+        let wt = meta.worktree_path.clone().unwrap();
+        wait_state(&daemon, meta.id, SessionState::Completed);
+        daemon.cleanup_worktree(meta.id, true).unwrap();
+        assert!(!wt.exists());
+        let err = daemon
+            .handoff(
+                meta.id,
+                HandoffRequest {
+                    harness: Harness::CodexCli,
+                    prompt: None,
+                    command_override: Some(sh("true")),
+                },
+            )
+            .unwrap_err();
+        assert!(matches!(err, DaemonError::Handoff(_, _)));
+    }
+
+    #[test]
+    fn sessions_waiting_on_a_prompt_surface_needs_input() {
+        let (_tmp, daemon, repo) = setup();
+        let meta = daemon
+            .launch(
+                launch_req(&repo, "printf 'Continue? (y/n) '; read x; exit 0"),
+                None,
+            )
+            .unwrap();
+
+        // After the prompt prints and output quiesces, state flips.
+        wait_state(&daemon, meta.id, SessionState::NeedsInput);
+
+        // Answering resumes and completes the session.
+        daemon.write_input(meta.id, b"y\n").unwrap();
+        wait_state(&daemon, meta.id, SessionState::Completed);
     }
 
     #[test]

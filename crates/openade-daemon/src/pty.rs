@@ -83,6 +83,7 @@ pub struct PtySession {
     killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
     exited: Arc<AtomicBool>,
     exit_code: Arc<Mutex<Option<u32>>>,
+    last_output: Arc<Mutex<std::time::Instant>>,
 }
 
 impl PtySession {
@@ -99,6 +100,19 @@ impl PtySession {
     /// Bytes of retained output.
     pub fn scrollback_len(&self) -> usize {
         self.scrollback.lock().expect("scrollback lock").buf.len()
+    }
+
+    /// The last `max_bytes` of output (lossy UTF-8) — used for prompt
+    /// detection.
+    pub fn tail(&self, max_bytes: usize) -> String {
+        let sb = self.scrollback.lock().expect("scrollback lock");
+        let start = sb.buf.len().saturating_sub(max_bytes);
+        String::from_utf8_lossy(&sb.buf[start..]).into_owned()
+    }
+
+    /// How long the PTY has been silent (no output).
+    pub fn idle_for(&self) -> std::time::Duration {
+        self.last_output.lock().expect("last_output lock").elapsed()
     }
 
     /// Whether the child process has exited.
@@ -141,6 +155,78 @@ impl PtySession {
             .kill()
             .map_err(PtyError::Io)
     }
+}
+
+/// Strip ANSI escape sequences (CSI and OSC) so prompt detection sees what
+/// the user sees.
+pub fn strip_ansi(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c != '\u{1b}' {
+            out.push(c);
+            continue;
+        }
+        match chars.peek() {
+            // CSI: ESC [ params... final byte in @..=~
+            Some('[') => {
+                chars.next();
+                for c in chars.by_ref() {
+                    if ('\u{40}'..='\u{7e}').contains(&c) {
+                        break;
+                    }
+                }
+            }
+            // OSC: ESC ] ... terminated by BEL or ESC \
+            Some(']') => {
+                chars.next();
+                while let Some(c) = chars.next() {
+                    if c == '\u{07}' {
+                        break;
+                    }
+                    if c == '\u{1b}' && chars.peek() == Some(&'\\') {
+                        chars.next();
+                        break;
+                    }
+                }
+            }
+            // Two-char escapes (ESC c, ESC =, ...)
+            Some(_) => {
+                chars.next();
+            }
+            None => {}
+        }
+    }
+    out
+}
+
+/// Heuristic: does the terminal tail look like the process is waiting for
+/// the user (R1 `needs-input` state)? Checked only after output quiescence.
+pub fn looks_like_awaiting_input(tail: &str) -> bool {
+    let clean = strip_ansi(tail);
+    let Some(last_line) = clean.lines().rev().find(|l| !l.trim().is_empty()) else {
+        return false;
+    };
+    let line = last_line.trim_end();
+    let lower = line.to_lowercase();
+
+    const PHRASES: [&str; 7] = [
+        "(y/n)",
+        "[y/n]",
+        "[y/n/a]",
+        "press enter",
+        "password",
+        "continue?",
+        "proceed?",
+    ];
+    if PHRASES.iter().any(|p| lower.contains(p)) {
+        return true;
+    }
+    // Interactive prompts overwhelmingly end in one of these.
+    const PROMPT_ENDINGS: [char; 7] = ['?', ':', '>', '$', '#', '❯', '›'];
+    line.chars()
+        .last()
+        .is_some_and(|c| PROMPT_ENDINGS.contains(&c))
 }
 
 /// Owns all PTY sessions in the daemon.
@@ -217,8 +303,10 @@ impl PtyHost {
         }
 
         // Reader thread: drains the PTY into the scrollback buffer.
+        let last_output = Arc::new(Mutex::new(std::time::Instant::now()));
         {
             let scrollback = Arc::clone(&scrollback);
+            let last_output = Arc::clone(&last_output);
             std::thread::Builder::new()
                 .name(format!("pty-reader-{session_id}"))
                 .spawn(move || {
@@ -231,6 +319,8 @@ impl PtyHost {
                                     .lock()
                                     .expect("scrollback lock")
                                     .append(&buf[..n]);
+                                *last_output.lock().expect("last_output lock") =
+                                    std::time::Instant::now();
                             }
                         }
                     }
@@ -245,6 +335,7 @@ impl PtyHost {
             killer: Mutex::new(killer),
             exited,
             exit_code,
+            last_output,
         });
 
         self.sessions
@@ -370,6 +461,58 @@ mod tests {
             "{out:?}"
         );
         assert!(out.contains("env-ok"), "{out:?}");
+    }
+
+    #[test]
+    fn strip_ansi_removes_csi_and_osc() {
+        assert_eq!(strip_ansi("\u{1b}[1;32mhello\u{1b}[0m"), "hello");
+        assert_eq!(strip_ansi("\u{1b}]0;title\u{07}prompt> "), "prompt> ");
+        assert_eq!(strip_ansi("plain"), "plain");
+        assert_eq!(strip_ansi("\u{1b}[2J\u{1b}[Hcleared"), "cleared");
+    }
+
+    #[test]
+    fn prompt_detection_heuristics() {
+        for tail in [
+            "Do you want to continue? (y/n) ",
+            "Overwrite CLAUDE.md? [Y/n]",
+            "Enter password: ",
+            "some output\n$ ",
+            "❯ ",
+            "\u{1b}[32m?\u{1b}[0m Pick a model >",
+            "Press Enter to continue",
+        ] {
+            assert!(looks_like_awaiting_input(tail), "should detect: {tail:?}");
+        }
+        for tail in [
+            "",
+            "Compiling openade-core v0.1.0",
+            "running 5 tests\ntest a ... ok",
+            "downloaded 3 crates in 1.2s.",
+        ] {
+            assert!(!looks_like_awaiting_input(tail), "false positive: {tail:?}");
+        }
+    }
+
+    #[test]
+    fn idle_and_tail_reflect_output_activity() {
+        let host = PtyHost::new();
+        let spec = CommandSpec::new("sh")
+            .arg("-c")
+            .arg("printf 'Continue? (y/n) '; read x; echo done");
+        let session = host.spawn(Uuid::new_v4(), &spec, None).unwrap();
+
+        assert!(wait_until(Duration::from_secs(10), || {
+            session.tail(64).contains("(y/n)")
+        }));
+        // Quiesces once the prompt is printed.
+        assert!(wait_until(Duration::from_secs(10), || {
+            session.idle_for() >= Duration::from_millis(300)
+        }));
+        assert!(looks_like_awaiting_input(&session.tail(64)));
+
+        session.write_input(b"y\n").unwrap();
+        assert!(wait_until(Duration::from_secs(10), || session.has_exited()));
     }
 
     #[test]

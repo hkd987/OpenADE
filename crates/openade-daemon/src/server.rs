@@ -29,6 +29,7 @@ pub fn router(daemon: Arc<Daemon>) -> Router {
         .route("/sessions/{id}/diff", get(get_diff))
         .route("/sessions/{id}/files", get(get_files))
         .route("/sessions/{id}/artifact", post(post_artifact))
+        .route("/sessions/{id}/handoff", post(post_handoff))
         .route("/projects", get(list_projects))
         .with_state(daemon)
 }
@@ -124,6 +125,17 @@ async fn post_artifact(
         .await
         .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))??;
     Ok((StatusCode::CREATED, Json(info)))
+}
+
+async fn post_handoff(
+    State(daemon): State<Arc<Daemon>>,
+    Path(id): Path<Uuid>,
+    Json(req): Json<crate::daemon::HandoffRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    let meta = tokio::task::spawn_blocking(move || daemon.handoff(id, req))
+        .await
+        .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))??;
+    Ok((StatusCode::CREATED, Json(meta)))
 }
 
 #[derive(Deserialize)]
