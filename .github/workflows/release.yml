@@ -5,6 +5,14 @@ name: Release
 # GitHub Release. See README "Install" for the download links.
 
 on:
+  # Tag pushes are the normal path; workflow_dispatch covers environments
+  # whose git remotes cannot push tag refs (the release action then creates
+  # the tag on GitHub itself).
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag (e.g. v0.2.0)"
+        required: true
   push:
     tags:
       - "v*"
@@ -42,7 +50,8 @@ jobs:
 
       - name: Package
         run: |
-          version="${GITHUB_REF_NAME#v}"
+          tag="${{ github.event.inputs.tag || github.ref_name }}"
+          version="${tag#v}"
           pkg="openade-${version}-${{ matrix.target }}"
           mkdir -p "dist/${pkg}"
           cp "target/${{ matrix.target }}/release/openade-daemon" \
@@ -70,9 +79,10 @@ jobs:
       - name: Create release with binaries
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
           files: |
             dist/*.tar.gz
             dist/*.sha256
           generate_release_notes: true
           draft: false
-          prerelease: ${{ contains(github.ref_name, '-') }}
+          prerelease: ${{ contains(github.event.inputs.tag || github.ref_name, '-') }}
