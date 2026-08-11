@@ -27,11 +27,14 @@ vi.mock("./components/NewSessionForm", () => ({
   NewSessionForm: ({
     onCreated,
     onClose,
+    initialRepo,
   }: {
     onCreated: (s: SessionMeta) => void;
     onClose: () => void;
+    initialRepo?: string;
   }) => (
     <div data-testid="form-stub">
+      {initialRepo !== undefined && <span>repo:{initialRepo}</span>}
       <button
         data-testid="stub-create"
         onClick={() =>
@@ -149,7 +152,32 @@ describe("App", () => {
     listSessions.mockResolvedValue({ sessions: [running, otherRepo] });
     render(<App />);
     const headers = await screen.findAllByTestId("project-group-header");
-    expect(headers.map((h) => h.textContent)).toEqual(["repo", "ledger"]);
+    expect(headers.map((h) => h.textContent?.replace(/[▸▾]/g, ""))).toEqual([
+      "repo",
+      "ledger",
+    ]);
+  });
+
+  it("collapses and expands a project group", async () => {
+    listSessions.mockResolvedValue({ sessions: [running] });
+    render(<App />);
+    expect(await screen.findByText("task one")).toBeInTheDocument();
+
+    const header = screen.getByTestId("project-group-header");
+    await userEvent.click(header);
+    expect(screen.queryByText("task one")).toBeNull();
+    expect(header).toHaveAttribute("aria-expanded", "false");
+
+    await userEvent.click(header);
+    expect(screen.getByText("task one")).toBeInTheDocument();
+  });
+
+  it("launches into a project from its + button", async () => {
+    listSessions.mockResolvedValue({ sessions: [running] });
+    render(<App />);
+    await userEvent.click(await screen.findByTestId("project-add"));
+    // The form opens pre-filled with that project's repository.
+    expect(screen.getByTestId("form-stub")).toHaveTextContent("repo:/repo");
   });
 
   it("selects a session card and renders its detail", async () => {

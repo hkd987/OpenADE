@@ -99,13 +99,15 @@ button presses — rather than through the HTTP API:
 | 35 | Zero-config shared memory | Same run: the repo's committed `.openade/memory-repo` (`acme/team-memory`) alone routed the published artifact to the shared repo — `shared_repo`/`shared_path` in the response, session doc + `index.md` in the shim state — with no per-user configuration at all |
 | 36 | First-run onboarding | Fresh daemon (no env, no `config.json`) + UI in Chromium: the welcome flow appears with "✓ GitHub memory is ready" (authenticated `gh` shim probed via `gh auth status`); entering `acme/team-memory` and pressing "Save & start" dismissed it, `GET /config` reported the saved repo + `onboarded: true`, `config.json` appeared in the data dir, and a reload did not re-onboard (screenshot in README) |
 | 37 | Onboarding guardrails | `PUT /config` with a malformed repo → 400 with the reason; daemon-side env vars (`BACKSTAGE_BASE_URL`/`OPENADE_MEMORY_REPO`) mark the daemon pre-onboarded so operators never see the flow; the signed-out/missing-`gh` states render the fix instructions (`gh auth login` / cli.github.com) in the status card |
+| 38 | Copilot CLI harness | Launched a `copilot-cli` session through the API against the shim: PTY runs `copilot`, rules materialize to `AGENTS.md`, session shows in the grid attributed "Copilot CLI" and is offered as a handoff target (screenshot above shows it running); real-CLI flag mapping (`-p`, `--resume`, `~/.copilot/mcp-config.json`) gated on the Phase 0 spike like the other harnesses |
+| 39 | Xirp parity affordances | Refreshed screenshot verifies: per-project "+" launches into that repo, chevroned collapsible project groups, colored state dots on every card, and "started N ago" in the detail header |
 
 ![Artifact banner with the shared team memory push](img/artifact-shared-memory.png)
 
 ## Not verifiable in this environment
 
-- The real `claude` / `codex` / `gemini` CLIs (no vendor credentials in the
-  container) — adapter flags remain gated on the
+- The real `claude` / `codex` / `gemini` / `copilot` CLIs (no vendor
+  credentials in the container) — adapter flags remain gated on the
   [Phase 0 spike](phase-0-spike.md) run on a developer machine.
 - A production Backstage instance — the REST surface was mocked
   byte-for-byte per the API docs; `wiremock` tests cover the same paths.

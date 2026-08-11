@@ -18,6 +18,8 @@ export default function App() {
   const [selected, setSelected] = useState<string | null>(null);
   const [daemonError, setDaemonError] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
+  const [formRepo, setFormRepo] = useState<string | undefined>(undefined);
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [config, setConfig] = useState<DaemonConfig | null>(null);
 
   const refresh = useCallback(async () => {
@@ -70,7 +72,10 @@ export default function App() {
         <span className="tagline">open agentic development environment</span>
         <button
           className="new-session-button"
-          onClick={() => setShowForm((v) => !v)}
+          onClick={() => {
+            setFormRepo(undefined);
+            setShowForm((v) => !v);
+          }}
           data-testid="toggle-new-session"
         >
           {showForm ? "Close" : "New session"}
@@ -85,6 +90,7 @@ export default function App() {
 
       {showForm && (
         <NewSessionForm
+          initialRepo={formRepo}
           onCreated={(session) => {
             setShowForm(false);
             setSelected(session.id);
@@ -101,25 +107,57 @@ export default function App() {
               No sessions yet — press “New session” to launch one.
             </p>
           )}
-          {projects.map((project) => (
-            <div key={project.repoRoot} className="project-group">
-              <div
-                className="project-group-header"
-                title={project.repoRoot}
-                data-testid="project-group-header"
-              >
-                {projectName(project.repoRoot)}
+          {projects.map((project) => {
+            const isCollapsed = collapsed.has(project.repoRoot);
+            return (
+              <div key={project.repoRoot} className="project-group">
+                <div className="project-group-bar">
+                  <button
+                    type="button"
+                    className="project-group-header"
+                    title={project.repoRoot}
+                    data-testid="project-group-header"
+                    aria-expanded={!isCollapsed}
+                    onClick={() =>
+                      setCollapsed((prev) => {
+                        const next = new Set(prev);
+                        if (next.has(project.repoRoot)) {
+                          next.delete(project.repoRoot);
+                        } else {
+                          next.add(project.repoRoot);
+                        }
+                        return next;
+                      })
+                    }
+                  >
+                    <span className="chevron">{isCollapsed ? "▸" : "▾"}</span>
+                    {projectName(project.repoRoot)}
+                  </button>
+                  <button
+                    type="button"
+                    className="project-add"
+                    title={`New session in ${projectName(project.repoRoot)}`}
+                    data-testid="project-add"
+                    onClick={() => {
+                      setFormRepo(project.repoRoot);
+                      setShowForm(true);
+                    }}
+                  >
+                    +
+                  </button>
+                </div>
+                {!isCollapsed &&
+                  project.sessions.map((session) => (
+                    <SessionCard
+                      key={session.id}
+                      session={session}
+                      selected={session.id === selected}
+                      onSelect={() => setSelected(session.id)}
+                    />
+                  ))}
               </div>
-              {project.sessions.map((session) => (
-                <SessionCard
-                  key={session.id}
-                  session={session}
-                  selected={session.id === selected}
-                  onSelect={() => setSelected(session.id)}
-                />
-              ))}
-            </div>
-          ))}
+            );
+          })}
         </section>
 
         <section className="terminal-pane" aria-label="Session detail">

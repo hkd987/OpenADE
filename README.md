@@ -2,14 +2,9 @@
 
 **An open, vendor-neutral agentic development environment.**
 
-> Status: **alpha**. The daemon, context layer, and UI work end-to-end (see
-> the [manual verification record](docs/manual-e2e.md)); the harness CLI
-> integrations ship with adapter mappings that are still being verified
-> against current vendor CLI releases ([Phase 0 spike](docs/phase-0-spike.md)).
-> "OpenADE" is a working codename (PRD Q4).
-
-OpenADE orchestrates parallel AI coding agent sessions — **Claude Code, Codex
-CLI, Gemini CLI** — in isolated Git worktrees from a single control surface,
+OpenADE orchestrates parallel AI coding agent sessions — **Claude Code,
+Codex CLI, Gemini CLI, Copilot CLI** — in isolated Git worktrees from a
+single control surface,
 and grounds every session in organizational memory via **MCP**: a
 **Backstage** software catalog (ownership, dependencies, APIs, ADRs,
 TechDocs) and/or **GitHub repositories** through your locally-authenticated
@@ -88,8 +83,11 @@ cargo install --path crates/openade-daemon --path crates/catalog-mcp
 ```
 
 The harness CLIs themselves are bring-your-own: install and authenticate
-`claude`, `codex`, and/or `gemini` through each vendor's normal flow.
-OpenADE never touches their credentials.
+`claude`, `codex`, `gemini`, and/or `copilot` through each vendor's normal
+flow. OpenADE never touches their credentials. (Adapter flag mappings are
+verified against current CLI releases via the
+[Phase 0 spike](docs/phase-0-spike.md) checklist — these tools change
+monthly.)
 
 ## Quickstart
 
@@ -168,7 +166,7 @@ branch, so everyone on it needs write access),
 │ Session daemon (Rust)                               │  crates/openade-daemon
 │  • PTY host — sessions survive window close         │
 │  • Git worktree isolation per task                  │
-│  • Harness adapters (claude / codex / gemini)       │
+│  • Harness adapters (claude/codex/gemini/copilot)   │
 │  • Context bundles + knowledge artifacts            │
 │  • Transcript recorder (JSONL + SQLite index)       │
 └───────┬─────────────────────────────┬───────────────┘
@@ -205,7 +203,7 @@ everything else → Backstage) — neither backend is a hard dependency.
 ## Testing
 
 ```sh
-cargo test                                        # 166 Rust tests (real git, real PTYs, mock Backstage, fake gh, fault injection)
+cargo test                                        # 167 Rust tests (real git, real PTYs, mock Backstage, fake gh, fault injection)
 cd apps/desktop && npm test                       # UI unit tests (vitest)
 cd apps/desktop && npm run e2e                    # 12 Playwright flows: real daemon + mock Backstage + gh shim + real Chromium
 ```

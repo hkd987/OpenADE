@@ -31,16 +31,18 @@ afterEach(() => {
 });
 
 describe("api client", () => {
-  it("covers all three harnesses with vendor attribution", () => {
+  it("covers all four harnesses with vendor attribution", () => {
     expect(HARNESSES.map((h) => h.id)).toEqual([
       "claude-code",
       "codex-cli",
       "gemini-cli",
+      "copilot-cli",
     ]);
     expect(HARNESSES.map((h) => h.vendor)).toEqual([
       "Anthropic",
       "OpenAI",
       "Google",
+      "GitHub",
     ]);
     expect(harnessLabel("gemini-cli")).toBe("Gemini CLI");
     expect(harnessLabel("unknown" as never)).toBe("unknown");

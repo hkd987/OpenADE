@@ -55,7 +55,7 @@ export default function prepareWorld() {
   // Harness shims: enough interactivity to exercise the PTY loop.
   const bin = path.join(tmpDir, "bin");
   fs.mkdirSync(bin, { recursive: true });
-  for (const name of ["claude", "codex", "gemini"]) {
+  for (const name of ["claude", "codex", "gemini", "copilot"]) {
     const shim = path.join(bin, name);
     fs.writeFileSync(
       shim,

@@ -1,12 +1,13 @@
 // Client for the openade-daemon localhost API.
 // Types mirror `openade-core` / `openade-daemon` serde shapes.
 
-export type Harness = "claude-code" | "codex-cli" | "gemini-cli";
+export type Harness = "claude-code" | "codex-cli" | "gemini-cli" | "copilot-cli";
 
 export const HARNESSES: { id: Harness; label: string; vendor: string }[] = [
   { id: "claude-code", label: "Claude Code", vendor: "Anthropic" },
   { id: "codex-cli", label: "Codex CLI", vendor: "OpenAI" },
   { id: "gemini-cli", label: "Gemini CLI", vendor: "Google" },
+  { id: "copilot-cli", label: "Copilot CLI", vendor: "GitHub" },
 ];
 
 export function harnessLabel(id: Harness): string {

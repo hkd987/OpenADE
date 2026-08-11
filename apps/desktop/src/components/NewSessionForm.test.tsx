@@ -31,6 +31,19 @@ describe("NewSessionForm", () => {
     );
   });
 
+  it("a project + button's repo wins over the project-list prefill", async () => {
+    render(
+      <NewSessionForm
+        onCreated={() => {}}
+        onClose={() => {}}
+        initialRepo="/repos/from-plus"
+      />,
+    );
+    // The project-list effect must not clobber the explicit repo.
+    await waitFor(() => expect(listProjects).toHaveBeenCalled());
+    expect(screen.getByTestId("ns-repo")).toHaveValue("/repos/from-plus");
+  });
+
   it("submits a launch request and reports the created session", async () => {
     const onCreated = vi.fn();
     createSession.mockResolvedValue({ id: "new-1", state: "running" });

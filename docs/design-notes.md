@@ -19,6 +19,25 @@ minimal) rather than imitating Xirp's light/orange design.
 | Living documentation is a **navigable wiki with an index** (grouped links + one-line summaries) | `docs/openade/sessions/index.md` is regenerated on every artifact publication — newest-first links with summaries, harness, and date — so merged knowledge stays navigable, not a pile of files |
 | Portal project page: Sessions tab per project/entity | `GET /sessions?entity=<ref>` is the data source; the Backstage frontend plugin renders it (P1 roadmap) |
 
+## Second screenshot audit (2026-08-11)
+
+A later Xirp screenshot (project sidebar with per-project "+" buttons,
+chevroned collapsible groups, dot-prefixed Working/Idle status, harness
+picker + elapsed time + Stop in the session header) prompted a parity
+sweep. Closed in this pass:
+
+| Xirp affordance | OpenADE |
+|---|---|
+| "+" on each project group creates a session in that project | `project-add` button per group, pre-filling the launch form's repository |
+| Collapsible project groups (chevron) | Group headers toggle collapse (`aria-expanded`), chevron indicator |
+| Colored status dot before the state label | CSS dot in the state's color on every card (state colors unchanged) |
+| Elapsed time in the session header | "started 5m ago" under the worktree path in the detail header |
+| Harness attribution in the session header | Already present: harness on the card + handoff picker in the header |
+
+Xirp's screenshot also shows the real Claude Code welcome banner in the
+terminal — OpenADE's PTY renders the same thing when the real CLI runs
+(shims stand in during tests).
+
 ## Deliberate differences
 
 - **Dark, quiet UI** instead of Xirp's light/orange: distinct identity and a

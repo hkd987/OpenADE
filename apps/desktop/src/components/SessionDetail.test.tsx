@@ -79,6 +79,8 @@ describe("SessionDetail", () => {
     const onChanged = vi.fn();
     render(<SessionDetail session={session} onChanged={onChanged} />);
     await userEvent.click(screen.getByTestId("artifact-button"));
+    // The header shows how long the session has been going.
+    expect(screen.getByTestId("session-runtime")).toHaveTextContent("started");
     const banner = await screen.findByTestId("artifact-banner");
     expect(banner).toHaveTextContent("openade/knowledge-x");
     // No shared memory repo configured — no team-memory link.

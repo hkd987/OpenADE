@@ -274,12 +274,61 @@ impl HarnessAdapter for GeminiAdapter {
     }
 }
 
+/// GitHub Copilot CLI (`copilot`).
+pub struct CopilotAdapter;
+
+impl HarnessAdapter for CopilotAdapter {
+    fn harness(&self) -> Harness {
+        Harness::CopilotCli
+    }
+
+    fn launch_command(&self, req: &LaunchRequest) -> CommandSpec {
+        let mut spec = CommandSpec::new(self.harness().program());
+        if let Some(prompt) = &req.prompt {
+            // Verify: `copilot -p <prompt>` seeds the session with an
+            // initial prompt (Phase 0 spike).
+            spec = spec.arg("-p").arg(prompt.clone());
+        }
+        spec
+    }
+
+    fn resume_command(&self, session_ref: &str) -> CommandSpec {
+        // Verify: `copilot --resume <session-id>` (Phase 0 spike, PRD Q1).
+        CommandSpec::new(self.harness().program())
+            .arg("--resume")
+            .arg(session_ref)
+    }
+
+    fn mcp_registrations(
+        &self,
+        _worktree: &Path,
+        servers: &[McpServerSpec],
+    ) -> Vec<McpRegistration> {
+        // Copilot CLI reads MCP servers from ~/.copilot/mcp-config.json.
+        let snippet = serde_json::json!({ "mcpServers": mcp_servers_json(servers) });
+        vec![McpRegistration {
+            scope: RegistrationScope::User,
+            file: PathBuf::from("~/.copilot/mcp-config.json"),
+            format: "json".into(),
+            snippet: serde_json::to_string_pretty(&snippet).expect("static json"),
+            note: "User-scoped; Copilot CLI has no project-scoped MCP config as of PRD \
+                   writing — verify in Phase 0 spike."
+                .into(),
+        }]
+    }
+
+    fn transcript_hint(&self, home: &Path) -> PathBuf {
+        home.join(".copilot").join("history-session-state")
+    }
+}
+
 /// The adapter for a harness.
 pub fn adapter_for(harness: Harness) -> &'static dyn HarnessAdapter {
     match harness {
         Harness::ClaudeCode => &ClaudeAdapter,
         Harness::CodexCli => &CodexAdapter,
         Harness::GeminiCli => &GeminiAdapter,
+        Harness::CopilotCli => &CopilotAdapter,
     }
 }
 

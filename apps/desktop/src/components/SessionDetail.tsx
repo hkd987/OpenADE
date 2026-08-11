@@ -9,6 +9,7 @@ import {
   killSession,
   publishArtifact,
   SessionMeta,
+  timeAgo,
 } from "../api";
 import { TerminalView } from "./TerminalView";
 
@@ -66,6 +67,11 @@ export function SessionDetail({
         <div className="detail-title">
           <strong>{session.title}</strong>
           <span className="worktree">{session.worktree_path}</span>
+          {timeAgo(session.created_at) !== "" && (
+            <span className="session-runtime" data-testid="session-runtime">
+              started {timeAgo(session.created_at)}
+            </span>
+          )}
         </div>
         <div className="detail-actions">
           <select

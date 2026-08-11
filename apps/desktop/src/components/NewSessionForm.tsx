@@ -10,13 +10,16 @@ import {
 export function NewSessionForm({
   onCreated,
   onClose,
+  initialRepo,
 }: {
   onCreated: (session: SessionMeta) => void;
   onClose: () => void;
+  /** Pre-filled repository (a project group's "+" button). */
+  initialRepo?: string;
 }) {
   const [title, setTitle] = useState("");
   const [harness, setHarness] = useState<Harness>("claude-code");
-  const [repoRoot, setRepoRoot] = useState("");
+  const [repoRoot, setRepoRoot] = useState(initialRepo ?? "");
   const [entityRef, setEntityRef] = useState("");
   const [prompt, setPrompt] = useState("");
   const [projects, setProjects] = useState<string[]>([]);

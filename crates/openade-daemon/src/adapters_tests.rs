@@ -140,3 +140,33 @@ fn codex_and_gemini_launch_commands_carry_prompts() {
     let spec = adapter_for(Harness::GeminiCli).launch_command(&req);
     assert_eq!(spec.args, vec!["-i", "fix it"]);
 }
+
+#[test]
+fn copilot_adapter_maps_the_github_cli_conventions() {
+    let req = LaunchRequest {
+        prompt: Some("fix it".into()),
+        mcp_servers: vec![],
+    };
+    let spec = adapter_for(Harness::CopilotCli).launch_command(&req);
+    assert_eq!(spec.program, "copilot");
+    assert_eq!(spec.args, vec!["-p", "fix it"]);
+
+    let spec = adapter_for(Harness::CopilotCli).resume_command("abc-123");
+    assert_eq!(spec.args, vec!["--resume", "abc-123"]);
+
+    // MCP registration is user-scoped JSON (~/.copilot/mcp-config.json) —
+    // surfaced to the user, never written into their home directory.
+    let regs =
+        adapter_for(Harness::CopilotCli).mcp_registrations(Path::new("/wt"), &[catalog_server()]);
+    assert_eq!(regs[0].scope, RegistrationScope::User);
+    assert_eq!(regs[0].file, PathBuf::from("~/.copilot/mcp-config.json"));
+    assert_eq!(regs[0].format, "json");
+    let parsed: serde_json::Value = serde_json::from_str(&regs[0].snippet).unwrap();
+    assert_eq!(parsed["mcpServers"]["catalog"]["command"], "catalog-mcp");
+
+    // Rules come from the shared AGENTS.md convention.
+    assert_eq!(
+        adapter_for(Harness::CopilotCli).rules_filename(),
+        "AGENTS.md"
+    );
+}

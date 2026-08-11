@@ -525,3 +525,66 @@ code {
 .onboarding-status a {
   color: inherit;
 }
+
+/* Xirp-parity grid affordances */
+.state::before {
+  content: "";
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  margin-right: 5px;
+  vertical-align: 1px;
+}
+
+.project-group-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+button.project-group-header {
+  background: none;
+  border: none;
+  padding: 4px 0;
+  flex: 1;
+  text-align: left;
+  cursor: pointer;
+}
+
+button.project-group-header:hover {
+  filter: none;
+  color: #d7dce4;
+}
+
+.project-group-header .chevron {
+  display: inline-block;
+  width: 14px;
+  color: #6b7280;
+  font-size: 10px;
+}
+
+.project-add {
+  background: none;
+  border: 1px solid #262b36;
+  border-radius: 6px;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  line-height: 1;
+  font-size: 14px;
+  color: #9aa3b2;
+}
+
+.project-add:hover {
+  border-color: #4f8cff;
+  color: #d7dce4;
+}
+
+.detail-title .session-runtime {
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
