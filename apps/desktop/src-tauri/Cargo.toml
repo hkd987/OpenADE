@@ -1,0 +1,24 @@
+# Excluded from the root Cargo workspace: building this crate requires
+# platform system libraries (WebKitGTK on Linux, WebKit on macOS via Xcode).
+# See apps/desktop/README.md for prerequisites.
+[package]
+name = "openade-desktop"
+description = "OpenADE desktop shell (Tauri 2)"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+repository = "https://github.com/hkd987/OpenADE"
+
+[workspace]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[lib]
+name = "openade_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
