@@ -304,6 +304,21 @@ fn publish_artifact_commits_to_a_review_branch_without_touching_checkout() {
     let committed = String::from_utf8_lossy(&show.stdout);
     assert!(committed.contains("README.md"));
 
+    // The living-docs index is committed alongside, referencing the artifact.
+    let show_index = Command::new("git")
+        .args([
+            "-C",
+            repo.to_str().unwrap(),
+            "show",
+            &format!("{}:docs/openade/sessions/index.md", info.branch),
+        ])
+        .output()
+        .unwrap();
+    assert!(show_index.status.success());
+    let index = String::from_utf8_lossy(&show_index.stdout);
+    assert!(index.contains("# Session knowledge index"));
+    assert!(index.contains("test task"), "{index}");
+
     // ...while the user's checkout is untouched (HEAD and status).
     let head_after = Command::new("git")
         .args(["-C", repo.to_str().unwrap(), "rev-parse", "HEAD"])

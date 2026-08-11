@@ -3,11 +3,42 @@
 
 export type Harness = "claude-code" | "codex-cli" | "gemini-cli";
 
-export const HARNESSES: { id: Harness; label: string }[] = [
-  { id: "claude-code", label: "Claude Code" },
-  { id: "codex-cli", label: "Codex CLI" },
-  { id: "gemini-cli", label: "Gemini CLI" },
+export const HARNESSES: { id: Harness; label: string; vendor: string }[] = [
+  { id: "claude-code", label: "Claude Code", vendor: "Anthropic" },
+  { id: "codex-cli", label: "Codex CLI", vendor: "OpenAI" },
+  { id: "gemini-cli", label: "Gemini CLI", vendor: "Google" },
 ];
+
+export function harnessLabel(id: Harness): string {
+  return HARNESSES.find((h) => h.id === id)?.label ?? id;
+}
+
+/** Project display name: the repository directory name. */
+export function projectName(repoRoot: string): string {
+  const parts = repoRoot.split("/").filter((p) => p !== "");
+  return parts[parts.length - 1] ?? repoRoot;
+}
+
+/** Compact relative time for session cards ("now", "5m ago", "3h ago"). */
+export function timeAgo(iso: string, now: Date = new Date()): string {
+  const then = new Date(iso).getTime();
+  const seconds = Math.floor((now.getTime() - then) / 1000);
+  if (Number.isNaN(then) || seconds < 0) {
+    return "";
+  }
+  if (seconds < 60) {
+    return "now";
+  }
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) {
+    return `${minutes}m ago`;
+  }
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) {
+    return `${hours}h ago`;
+  }
+  return `${Math.floor(hours / 24)}d ago`;
+}
 
 export type SessionState =
   | "idle"

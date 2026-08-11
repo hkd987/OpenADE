@@ -3,12 +3,15 @@ import {
   createSession,
   getDiff,
   handoffSession,
+  harnessLabel,
   HARNESSES,
   killSession,
   listProjects,
   listSessions,
+  projectName,
   publishArtifact,
   sendInput,
+  timeAgo,
 } from "./api";
 
 function mockFetch(status: number, body: unknown) {
@@ -27,12 +30,35 @@ afterEach(() => {
 });
 
 describe("api client", () => {
-  it("covers all three harnesses", () => {
+  it("covers all three harnesses with vendor attribution", () => {
     expect(HARNESSES.map((h) => h.id)).toEqual([
       "claude-code",
       "codex-cli",
       "gemini-cli",
     ]);
+    expect(HARNESSES.map((h) => h.vendor)).toEqual([
+      "Anthropic",
+      "OpenAI",
+      "Google",
+    ]);
+    expect(harnessLabel("gemini-cli")).toBe("Gemini CLI");
+    expect(harnessLabel("unknown" as never)).toBe("unknown");
+  });
+
+  it("derives project names from repository paths", () => {
+    expect(projectName("/repos/payments-api")).toBe("payments-api");
+    expect(projectName("/repos/payments-api/")).toBe("payments-api");
+    expect(projectName("")).toBe("");
+  });
+
+  it("renders compact relative times", () => {
+    const now = new Date("2026-08-11T12:00:00Z");
+    expect(timeAgo("2026-08-11T11:59:30Z", now)).toBe("now");
+    expect(timeAgo("2026-08-11T11:55:00Z", now)).toBe("5m ago");
+    expect(timeAgo("2026-08-11T09:00:00Z", now)).toBe("3h ago");
+    expect(timeAgo("2026-08-09T12:00:00Z", now)).toBe("2d ago");
+    expect(timeAgo("not a date", now)).toBe("");
+    expect(timeAgo("2026-08-12T00:00:00Z", now)).toBe("");
   });
 
   it("lists sessions from the daemon", async () => {

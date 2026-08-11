@@ -99,6 +99,19 @@ describe("App", () => {
     );
   });
 
+  it("groups the grid by project", async () => {
+    const otherRepo: SessionMeta = {
+      ...running,
+      id: "s-9",
+      title: "other repo task",
+      repo_root: "/repos/ledger",
+    };
+    listSessions.mockResolvedValue({ sessions: [running, otherRepo] });
+    render(<App />);
+    const headers = await screen.findAllByTestId("project-group-header");
+    expect(headers.map((h) => h.textContent)).toEqual(["repo", "ledger"]);
+  });
+
   it("selects a session card and renders its detail", async () => {
     const other: SessionMeta = { ...running, id: "s-2", title: "task two" };
     listSessions.mockResolvedValue({ sessions: [running, other] });

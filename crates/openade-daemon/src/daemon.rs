@@ -601,11 +601,28 @@ impl Daemon {
         let branch = format!("{}{slug}", crate::artifact::KNOWLEDGE_BRANCH_PREFIX);
         let file = PathBuf::from(crate::artifact::ARTIFACT_DIR).join(format!("{slug}.md"));
 
+        // Living documentation: the artifact plus an updated index page that
+        // aggregates every published session (Xirp's "documentation that
+        // compounds" — ours is Git-reviewed).
         let mgr = self.worktree_manager(&meta.repo_root);
-        mgr.commit_file_on_branch(
+        let index_rel = PathBuf::from(crate::artifact::INDEX_FILE);
+        let existing_index = mgr.read_file_at("HEAD", &index_rel).ok();
+        let index = crate::artifact::upsert_index(
+            existing_index.as_deref(),
+            &crate::artifact::IndexEntry {
+                file_name: format!("{slug}.md"),
+                title: meta.title.clone(),
+                summary: summary.clone(),
+                date: meta.created_at.format("%Y-%m-%d").to_string(),
+                harness: meta.harness.id().to_string(),
+            },
+        );
+        mgr.commit_files_on_branch(
             &branch,
-            &file,
-            &markdown,
+            &[
+                (file.as_path(), markdown.as_str()),
+                (index_rel.as_path(), index.as_str()),
+            ],
             &format!("docs: session knowledge — {}", meta.title),
         )?;
 

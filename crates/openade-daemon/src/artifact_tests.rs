@@ -88,3 +88,35 @@ fn summarize_without_prompts_or_changes_stays_structured() {
     assert!(md.contains("No file changes were recorded"));
     assert!(!md.contains("## Outcome"));
 }
+
+#[test]
+fn index_upserts_newest_first_and_replaces_republished_entries() {
+    let first = IndexEntry {
+        file_name: "2026-08-10-add-retries-aa.md".into(),
+        title: "add retries".into(),
+        summary: "Added retry logic.".into(),
+        date: "2026-08-10".into(),
+        harness: "claude-code".into(),
+    };
+    let index = upsert_index(None, &first);
+    assert!(index.starts_with("# Session knowledge index"));
+    assert!(index.contains("[add retries](2026-08-10-add-retries-aa.md)"));
+
+    // A second session lands on top.
+    let second = IndexEntry {
+        file_name: "2026-08-11-fix-flaky-bb.md".into(),
+        title: "fix flaky test".into(),
+        summary: "Pinned the clock.".into(),
+        date: "2026-08-11".into(),
+        harness: "gemini-cli".into(),
+    };
+    let index = upsert_index(Some(&index), &second);
+    let fix_pos = index.find("fix flaky test").unwrap();
+    let retries_pos = index.find("add retries").unwrap();
+    assert!(fix_pos < retries_pos, "newest first:\n{index}");
+
+    // Re-publishing the first replaces its line instead of duplicating.
+    let index = upsert_index(Some(&index), &first);
+    assert_eq!(index.matches("add-retries-aa.md").count(), 1);
+    assert_eq!(index.matches("fix-flaky-bb.md").count(), 1);
+}

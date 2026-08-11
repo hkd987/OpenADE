@@ -160,6 +160,52 @@ impl Summarizer for TemplateSummarizer {
     }
 }
 
+/// Repo-relative path of the living documentation index that aggregates all
+/// session artifacts (newest first). Regenerated on every publication so the
+/// docs stay navigable as they accumulate.
+pub const INDEX_FILE: &str = "docs/openade/sessions/index.md";
+
+/// One line of the session knowledge index.
+#[derive(Debug, Clone)]
+pub struct IndexEntry {
+    /// Artifact file name (relative to the index).
+    pub file_name: String,
+    pub title: String,
+    pub summary: String,
+    /// ISO date of the session.
+    pub date: String,
+    pub harness: String,
+}
+
+/// Merge a new entry into the (possibly missing) existing index, newest
+/// first. Re-publishing the same artifact replaces its entry instead of
+/// duplicating it.
+pub fn upsert_index(existing: Option<&str>, entry: &IndexEntry) -> String {
+    let mut lines: Vec<String> = existing
+        .map(|s| {
+            s.lines()
+                .filter(|l| l.starts_with("- ["))
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+    let marker = format!("]({})", entry.file_name);
+    lines.retain(|l| !l.contains(&marker));
+    lines.insert(
+        0,
+        format!(
+            "- [{}]({}) — {} *({}, {})*",
+            entry.title, entry.file_name, entry.summary, entry.date, entry.harness
+        ),
+    );
+    format!(
+        "# Session knowledge index\n\n\
+         Living documentation captured from OpenADE sessions, newest first.\n\
+         Each entry links to the full session record.\n\n{}\n",
+        lines.join("\n")
+    )
+}
+
 /// Slug + short id for artifact filenames and branches.
 pub fn artifact_slug(meta: &SessionMeta) -> String {
     let short = meta.id.simple().to_string()[..8].to_string();

@@ -75,7 +75,7 @@ export function NewSessionForm({
         >
           {HARNESSES.map((h) => (
             <option key={h.id} value={h.id}>
-              {h.label}
+              {h.label} · {h.vendor}
             </option>
           ))}
         </select>

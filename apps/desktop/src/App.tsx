@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { listSessions, SessionMeta } from "./api";
+import { listSessions, projectName, SessionMeta } from "./api";
 import { NewSessionForm } from "./components/NewSessionForm";
 import { SessionCard } from "./components/SessionCard";
 import { SessionDetail } from "./components/SessionDetail";
@@ -29,6 +29,17 @@ export default function App() {
   }, [refresh]);
 
   const selectedSession = sessions.find((s) => s.id === selected) ?? null;
+
+  // Sessions grouped by project (repository), in the order projects appear.
+  const projects: { repoRoot: string; sessions: SessionMeta[] }[] = [];
+  for (const session of sessions) {
+    const group = projects.find((p) => p.repoRoot === session.repo_root);
+    if (group) {
+      group.sessions.push(session);
+    } else {
+      projects.push({ repoRoot: session.repo_root, sessions: [session] });
+    }
+  }
 
   return (
     <div className="app">
@@ -68,13 +79,24 @@ export default function App() {
               No sessions yet — press “New session” to launch one.
             </p>
           )}
-          {sessions.map((session) => (
-            <SessionCard
-              key={session.id}
-              session={session}
-              selected={session.id === selected}
-              onSelect={() => setSelected(session.id)}
-            />
+          {projects.map((project) => (
+            <div key={project.repoRoot} className="project-group">
+              <div
+                className="project-group-header"
+                title={project.repoRoot}
+                data-testid="project-group-header"
+              >
+                {projectName(project.repoRoot)}
+              </div>
+              {project.sessions.map((session) => (
+                <SessionCard
+                  key={session.id}
+                  session={session}
+                  selected={session.id === selected}
+                  onSelect={() => setSelected(session.id)}
+                />
+              ))}
+            </div>
           ))}
         </section>
 

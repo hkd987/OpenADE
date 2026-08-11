@@ -165,17 +165,16 @@ impl WorktreeManager {
             .map(|_| ())
     }
 
-    /// Commit a single file onto a new branch (from the repo's current HEAD)
-    /// without touching the primary checkout or any task worktree — used for
+    /// Commit files onto a new branch (from the repo's current HEAD) without
+    /// touching the primary checkout or any task worktree — used for
     /// knowledge artifacts (PRD R6: artifacts land on a review branch).
     ///
     /// Uses a throwaway detached worktree so the user's checkout, index, and
     /// running sessions are never disturbed.
-    pub fn commit_file_on_branch(
+    pub fn commit_files_on_branch(
         &self,
         branch: &str,
-        rel_path: &Path,
-        content: &str,
+        files: &[(&Path, &str)],
         message: &str,
     ) -> Result<(), WorktreeError> {
         self.ensure_repo()?;
@@ -191,14 +190,16 @@ impl WorktreeManager {
         )?;
         let result = (|| {
             self.git(&tmp, &["checkout", "-b", branch])?;
-            // The target sits inside the (absolute) temp worktree, so a
-            // parent always exists.
-            let target = tmp.join(rel_path);
-            let parent = target.parent().expect("artifact path has a parent");
-            std::fs::create_dir_all(parent)?;
-            std::fs::write(&target, content)?;
-            let rel = rel_path.to_string_lossy().into_owned();
-            self.git(&tmp, &["add", &rel])?;
+            for (rel_path, content) in files {
+                // The target sits inside the (absolute) temp worktree, so a
+                // parent always exists.
+                let target = tmp.join(rel_path);
+                let parent = target.parent().expect("artifact path has a parent");
+                std::fs::create_dir_all(parent)?;
+                std::fs::write(&target, content)?;
+                let rel = rel_path.to_string_lossy().into_owned();
+                self.git(&tmp, &["add", &rel])?;
+            }
             // Explicit identity: artifact commits must work on machines
             // without global git config.
             self.git(
@@ -221,6 +222,25 @@ impl WorktreeManager {
             &["worktree", "remove", "--force", &tmp_str],
         );
         result
+    }
+
+    /// Convenience wrapper for single-file publications.
+    pub fn commit_file_on_branch(
+        &self,
+        branch: &str,
+        rel_path: &Path,
+        content: &str,
+        message: &str,
+    ) -> Result<(), WorktreeError> {
+        self.commit_files_on_branch(branch, &[(rel_path, content)], message)
+    }
+
+    /// Read a file from a branch (or any revision) without a checkout.
+    pub fn read_file_at(&self, revision: &str, rel_path: &Path) -> Result<String, WorktreeError> {
+        self.git(
+            &self.repo_root,
+            &["show", &format!("{revision}:{}", rel_path.display())],
+        )
     }
 
     /// The task's full diff: everything in the worktree (committed on the
