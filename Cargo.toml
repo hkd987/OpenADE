@@ -4,6 +4,7 @@ members = [
     "crates/openade-core",
     "crates/openade-daemon",
     "crates/catalog-mcp",
+    "crates/openade-server",
 ]
 # The Tauri shell crate needs platform system libraries (WebKit/GTK on Linux)
 # and is built separately — see apps/desktop/README.md.
