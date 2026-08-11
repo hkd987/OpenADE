@@ -13,7 +13,7 @@ minimal) rather than imitating Xirp's light/orange design.
 |---|---|
 | Sidebar groups sessions **by project**, with per-project headers | Session grid groups by repository with uppercase project headers (`projectName(repo_root)`) |
 | Session cards: branch ref + status ("Working" / "Idle"), tinted active card | Cards show branch, entity, and state badge; our vocabulary is richer (`running` / `needs-input` / `completed` / `failed`) because needs-input is a first-class grid state (R1) |
-| Workspace session list shows author + model + relative age | Cards show harness + compact relative age ("5m ago"); author becomes relevant in shared-daemon mode (P2) |
+| Workspace session list shows author + model + relative age | Cards show harness + compact relative age ("5m ago"); author is out of scope (multi-user is intentionally not part of this repository) |
 | Model picker attributes each harness to its vendor | Harness picker options read "Claude Code · Anthropic", etc. |
 | Session header: harness selector, elapsed time, Stop | Detail header: handoff harness selector, Kill; elapsed time on the card |
 | Living documentation is a **navigable wiki with an index** (grouped links + one-line summaries) | `docs/openade/sessions/index.md` is regenerated on every artifact publication — newest-first links with summaries, harness, and date — so merged knowledge stays navigable, not a pile of files |

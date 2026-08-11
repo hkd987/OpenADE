@@ -31,6 +31,12 @@ daemon or catalog work.
 - **CLI facts need receipts.** The agent CLIs change monthly. Changes to
   adapter flags/paths should state the CLI version they were verified
   against (see the Phase 0 spike doc for the checklist).
+- **Multi-user / shared-session features are out of scope for this
+  repository.** Shared daemons, presence, member visibility, and team
+  server mode are intentionally not implemented here and contributions
+  adding them will not be accepted. This project stays single-user and
+  local-first; team collaboration happens through the Git-native surfaces
+  it already has (review branches, the shared memory repo).
 - **No telemetry, no credential handling.** Don't add code that phones home or
   touches harness credentials; both are hard product commitments (PRD §7.5).
 - **The README ships with the change.** Documentation is part of the diff,

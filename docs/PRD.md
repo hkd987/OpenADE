@@ -137,7 +137,7 @@ The only integrated solution (Xirp) locks the context layer to Spotify's commerc
 - Additional catalog providers (Port, Cortex, Git-native YAML catalog).
 - Cost/model routing across harnesses.
 - Governance hooks: session telemetry export for policy/audit tooling.
-- Team/multi-user server mode.
+- Team/multi-user server mode — **explicitly out of scope for this repository**; do not design toward or implement it here.
 
 ## 7. Technical Design
 
