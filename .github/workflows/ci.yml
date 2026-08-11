@@ -39,6 +39,30 @@ jobs:
       - run: npm test
       - run: npm run build
 
+  e2e:
+    name: End-to-end (daemon + UI in Chromium)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+      - run: npm ci
+        working-directory: apps/desktop
+      - run: npx playwright install --with-deps chromium
+        working-directory: apps/desktop
+      - run: npx playwright test
+        working-directory: apps/desktop
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: apps/desktop/playwright-report/
+
   tauri-shell:
     # The shell crate needs system webview libraries and is excluded from the
     # default workspace; keep it compiling without blocking the pipeline while

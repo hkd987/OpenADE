@@ -31,6 +31,9 @@ pub fn router(daemon: Arc<Daemon>) -> Router {
         .route("/sessions/{id}/artifact", post(post_artifact))
         .route("/sessions/{id}/handoff", post(post_handoff))
         .route("/projects", get(list_projects))
+        // The daemon binds loopback-only; the UI (vite dev server, Tauri
+        // webview) is a different origin, so CORS must be open for it.
+        .layer(tower_http::cors::CorsLayer::permissive())
         .with_state(daemon)
 }
 

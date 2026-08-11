@@ -36,4 +36,5 @@ uuid = { version = "1", features = ["v4", "serde"] }
 http-body-util = "0.1"
 tempfile = "3"
 tower = { version = "0.5", features = ["util"] }
+tower-http = { version = "0.6", features = ["cors"] }
 wiremock = "0.6"
