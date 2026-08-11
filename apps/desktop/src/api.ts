@@ -19,6 +19,19 @@ export function projectName(repoRoot: string): string {
   return parts[parts.length - 1] ?? repoRoot;
 }
 
+/**
+ * Split an entity ref into its kind and the rest, for the memory chip.
+ * `repo:acme/payments` → kind "repo" (GitHub source); anything else (e.g.
+ * `component:default/x`) is a catalog kind.
+ */
+export function splitEntityRef(ref: string): { kind: string; rest: string } {
+  const idx = ref.indexOf(":");
+  if (idx <= 0) {
+    return { kind: "entity", rest: ref };
+  }
+  return { kind: ref.slice(0, idx), rest: ref.slice(idx + 1) };
+}
+
 /** Compact relative time for session cards ("now", "5m ago", "3h ago"). */
 export function timeAgo(iso: string, now: Date = new Date()): string {
   const then = new Date(iso).getTime();

@@ -23,6 +23,29 @@ prompts in v0).
 4. **Read-only.** The write path (knowledge artifacts) goes through Git PRs,
    not through this server (PRD §7.3).
 
+## Memory sources
+
+Two sources back the six tools, composed by `MemoryRouter` (`src/router.rs`)
+and routed by entity kind:
+
+| Entity kind | Source | Auth | Enabled by |
+|---|---|---|---|
+| `repo:owner/name` | **GitHub**, via the user's local `gh` CLI (`src/github.rs`) | `gh auth login` — OpenADE never touches credentials (same posture as the harness CLIs) | `gh` on PATH (override binary with `OPENADE_GH_BIN`; disable with `OPENADE_GITHUB_MEMORY=0`) |
+| everything else (`component:`, `api:`, `group:`, …) | **Backstage** REST APIs (`src/backstage.rs`) | static bearer token | `BACKSTAGE_BASE_URL` (+ optional `BACKSTAGE_TOKEN`) |
+
+GitHub mapping onto the neutral entity shape:
+
+| Tool | GitHub behavior |
+|---|---|
+| `get_entity` | `gh repo view --json …` → metadata (description, topics→tags, language→spec.type, archived→lifecycle, repo/homepage links) + `ownedBy` relations from **CODEOWNERS** (global `*` rule, last one wins; `@org/team` → `group:org/team`, `@user` → `user:github/user`; fallback: the repo owner) |
+| `get_owner` | resolves those `ownedBy` refs (bare refs kept when unresolvable) |
+| `get_dependencies` / `get_apis_for_entity` | empty in v1 (manifest parsing is a follow-up) |
+| `search_catalog` | `gh search repos` → `repo:` entities; the router fans search out to *all* sources and merges within the limit |
+| `get_techdocs_page` | `gh api repos/{o}/{r}/contents/{path}` with the raw accept header — README, `docs/`, ADRs, any file |
+
+GitHub Enterprise works automatically: `gh` talks to whatever host it is
+authenticated against. Issues/PR content as memory is an explicit follow-up.
+
 ## Tools
 
 All results are returned as a single `text` content block containing

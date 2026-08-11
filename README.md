@@ -10,10 +10,12 @@
 
 OpenADE orchestrates parallel AI coding agent sessions — **Claude Code, Codex
 CLI, Gemini CLI** — in isolated Git worktrees from a single control surface,
-and grounds every session in your organization's context from a **Backstage**
-software catalog via **MCP**: ownership, dependencies, APIs, ADRs, TechDocs.
-Session knowledge flows back as reviewed documentation, so every session
-makes the next one smarter.
+and grounds every session in organizational memory via **MCP**: a
+**Backstage** software catalog (ownership, dependencies, APIs, ADRs,
+TechDocs) and/or **GitHub repositories** through your locally-authenticated
+`gh` CLI (repo metadata, CODEOWNERS ownership, README/docs). Session
+knowledge flows back as reviewed documentation, so every session makes the
+next one smarter.
 
 The context layer is open and pluggable — the inverse of commercial,
 closed-context agent environments. Bring your own catalog; no accounts, no
@@ -29,12 +31,14 @@ telemetry, local-first.
   survive the window closing; reattach with full scrollback. Session states
   (`running` / `needs-input` / `completed` / `failed`) surface in a grid,
   including prompt detection for "the agent is waiting on you".
-- **Context-grounded sessions** — launch from a catalog entity and the agent
+- **Context-grounded sessions** — launch from a memory entity and the agent
   starts with a budgeted context bundle (owner, dependencies, APIs, docs,
   prior session outcomes) injected into its rules file, plus the `catalog`
   MCP server registered for on-demand retrieval (`get_entity`, `get_owner`,
   `get_dependencies`, `get_apis_for_entity`, `search_catalog`,
-  `get_techdocs_page`).
+  `get_techdocs_page`). Two memory sources, routed by ref:
+  `component:ns/name` → Backstage; `repo:owner/name` → GitHub via your
+  local `gh` CLI (OpenADE never touches GitHub credentials).
 - **Knowledge loop** — one click summarizes a session (transcript + diff)
   into a markdown artifact committed on an `openade/knowledge-*` review
   branch under `docs/`; once merged it feeds the context bundle of the next
@@ -67,8 +71,9 @@ OpenADE never touches their credentials.
 ## Quickstart
 
 ```sh
-# 1. Start the daemon (localhost:7433). Optional: point it at your Backstage
-#    to get context bundles and catalog MCP tools in every entity session.
+# 1. Start the daemon (localhost:7433). Memory sources are optional and
+#    combine: Backstage via env; GitHub automatically whenever the gh CLI
+#    is installed and authenticated (gh auth login).
 export BACKSTAGE_BASE_URL=https://backstage.example.com   # optional
 export BACKSTAGE_TOKEN=...                                # optional
 openade-daemon
@@ -81,6 +86,7 @@ curl -s -X POST localhost:7433/sessions -H 'content-type: application/json' -d '
   "entity_ref": "component:default/payments-api",
   "prompt": "Add retries with exponential backoff to the payments client."
 }'
+# ...or ground it in a GitHub repo instead:  "entity_ref": "repo:acme/payments"
 
 # 3. Run the UI (dev mode; Node 20+)
 cd apps/desktop && npm install && npm run dev
@@ -93,8 +99,9 @@ Useful daemon endpoints: `GET /sessions`, `GET /sessions/{id}/scrollback`,
 
 Environment knobs: `OPENADE_DAEMON_PORT` (default 7433), `OPENADE_DATA_DIR`
 (default `~/.openade` — transcripts, session index, worktrees),
-`BACKSTAGE_BASE_URL` / `BACKSTAGE_TOKEN` (context layer),
-`VITE_OPENADE_DAEMON_URL` (UI → daemon).
+`BACKSTAGE_BASE_URL` / `BACKSTAGE_TOKEN` (Backstage memory source),
+`OPENADE_GH_BIN` / `OPENADE_GITHUB_MEMORY=0` (GitHub memory source — defaults
+to the `gh` CLI on PATH), `VITE_OPENADE_DAEMON_URL` (UI → daemon).
 
 ## Architecture
 
@@ -115,17 +122,18 @@ Environment knobs: `OPENADE_DAEMON_PORT` (default 7433), `OPENADE_DATA_DIR`
 ┌───────▼───────────┐        ┌────────▼───────────────┐
 │ Harness CLIs      │  MCP   │ catalog-mcp (Rust)     │  crates/catalog-mcp
 │ (user-installed,  │◄──────►│  CatalogProvider trait │
-│  user-authed)     │        │  └ BackstageProvider   │
-└───────────────────┘        └────────┬───────────────┘
-                                      │ REST (read-only)
-                             ┌────────▼───────────────┐
-                             │ Your Backstage         │
-                             └────────────────────────┘
+│  user-authed)     │        │  └ MemoryRouter        │
+└───────────────────┘        └───┬──────────────┬─────┘
+                     REST (read) │              │ local gh CLI (read)
+                        ┌────────▼─────────┐ ┌──▼──────────────────┐
+                        │ Your Backstage   │ │ GitHub repos        │
+                        │ (catalog, docs)  │ │ (CODEOWNERS, docs)  │
+                        └──────────────────┘ └─────────────────────┘
 ```
 
-Shared domain types live in `crates/openade-core`. The catalog backend is
-abstracted behind the `CatalogProvider` trait — Backstage is the first
-implementation, not a hard dependency.
+Shared domain types live in `crates/openade-core`. Memory sources implement
+the `CatalogProvider` trait and are composed by kind (`repo:` → GitHub,
+everything else → Backstage) — neither backend is a hard dependency.
 
 ## Documentation
 
@@ -143,9 +151,9 @@ implementation, not a hard dependency.
 ## Testing
 
 ```sh
-cargo test                                        # 119 Rust tests (real git, real PTYs, mock Backstage, fault injection)
+cargo test                                        # 146 Rust tests (real git, real PTYs, mock Backstage, fake gh, fault injection)
 cd apps/desktop && npm test                       # UI unit tests (vitest)
-cd apps/desktop && npm run e2e                    # 10 Playwright flows: real daemon + mock Backstage + real Chromium
+cd apps/desktop && npm run e2e                    # 11 Playwright flows: real daemon + mock Backstage + gh shim + real Chromium
 ```
 
 Product-code line coverage is 100% on both the Rust workspace and the UI —

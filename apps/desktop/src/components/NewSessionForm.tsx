@@ -98,14 +98,18 @@ export function NewSessionForm({
         </datalist>
       </div>
       <div className="form-row">
-        <label htmlFor="ns-entity">Catalog entity (optional)</label>
+        <label htmlFor="ns-entity">Memory entity (optional)</label>
         <input
           id="ns-entity"
           value={entityRef}
           onChange={(e) => setEntityRef(e.target.value)}
-          placeholder="component:default/payments-api"
+          placeholder="component:default/payments-api or repo:acme/payments"
           data-testid="ns-entity"
         />
+        <span className="form-hint" data-testid="ns-entity-hint">
+          Backstage: <code>component:ns/name</code> · GitHub (via{" "}
+          <code>gh</code>): <code>repo:owner/name</code>
+        </span>
       </div>
       <div className="form-row">
         <label htmlFor="ns-prompt">Initial prompt (optional)</label>

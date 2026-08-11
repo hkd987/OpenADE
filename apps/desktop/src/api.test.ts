@@ -11,6 +11,7 @@ import {
   projectName,
   publishArtifact,
   sendInput,
+  splitEntityRef,
   timeAgo,
 } from "./api";
 
@@ -49,6 +50,22 @@ describe("api client", () => {
     expect(projectName("/repos/payments-api")).toBe("payments-api");
     expect(projectName("/repos/payments-api/")).toBe("payments-api");
     expect(projectName("")).toBe("");
+  });
+
+  it("splits entity refs into kind and rest for the memory chip", () => {
+    expect(splitEntityRef("repo:acme/payments")).toEqual({
+      kind: "repo",
+      rest: "acme/payments",
+    });
+    expect(splitEntityRef("component:default/x")).toEqual({
+      kind: "component",
+      rest: "default/x",
+    });
+    expect(splitEntityRef("no-colon")).toEqual({
+      kind: "entity",
+      rest: "no-colon",
+    });
+    expect(splitEntityRef(":odd")).toEqual({ kind: "entity", rest: ":odd" });
   });
 
   it("renders compact relative times", () => {

@@ -58,5 +58,33 @@ export default function prepareWorld() {
     fs.chmodSync(shim, 0o755);
   }
 
+  // gh shim: stands in for the user's authenticated GitHub CLI, serving the
+  // repo:acme/checkout-service fixture (the daemon auto-detects it on PATH).
+  const gh = path.join(bin, "gh");
+  fs.writeFileSync(
+    gh,
+    `#!/bin/sh
+case "$*" in
+  "repo view acme/checkout-service --json"*)
+    printf '{"name":"checkout-service","owner":{"login":"acme"},"description":"Checkout flow service for the acme shop.","url":"https://github.com/acme/checkout-service","homepageUrl":"","repositoryTopics":[{"name":"checkout"}],"primaryLanguage":{"name":"Go"},"isArchived":false,"defaultBranchRef":{"name":"main"}}'
+    ;;
+  "api repos/acme/checkout-service/contents/.github/CODEOWNERS"*)
+    printf '* @acme/checkout-team\\n'
+    ;;
+  "api repos/acme/checkout-service/contents/README.md"*)
+    printf '# Checkout Service\\nOwns the checkout flow.\\n'
+    ;;
+  "search repos"*)
+    printf '[{"fullName":"acme/checkout-service","description":"Checkout flow service.","url":"https://github.com/acme/checkout-service"}]'
+    ;;
+  *)
+    echo "gh: Not Found (HTTP 404)" >&2
+    exit 1
+    ;;
+esac
+`,
+  );
+  fs.chmodSync(gh, 0o755);
+
   process.env.OPENADE_E2E_REPO = repo;
 }

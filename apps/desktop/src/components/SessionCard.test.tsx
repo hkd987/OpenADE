@@ -17,12 +17,30 @@ const session: SessionMeta = {
 };
 
 describe("SessionCard", () => {
-  it("shows state, harness, entity, and branch", () => {
+  it("shows state, harness, entity chip, and branch", () => {
     render(<SessionCard session={session} selected={false} onSelect={() => {}} />);
     expect(screen.getByText("needs-input")).toBeInTheDocument();
     expect(screen.getByText("Claude Code")).toBeInTheDocument();
-    expect(screen.getByText("component:default/payments-api")).toBeInTheDocument();
+    // The memory chip splits the ref into a highlighted kind + the rest.
+    const chip = screen.getByTestId("entity-chip");
+    expect(chip).toHaveTextContent("component");
+    expect(chip).toHaveTextContent("default/payments-api");
+    expect(chip.className).toContain("entity-chip-component");
     expect(screen.getByText("openade/add-retries-ab12")).toBeInTheDocument();
+  });
+
+  it("marks repo entities as the GitHub memory source", () => {
+    const repoSession: SessionMeta = {
+      ...session,
+      entity_ref: "repo:acme/payments-service",
+    };
+    render(
+      <SessionCard session={repoSession} selected={false} onSelect={() => {}} />,
+    );
+    const chip = screen.getByTestId("entity-chip");
+    expect(chip.className).toContain("entity-chip-repo");
+    expect(chip).toHaveTextContent("repo");
+    expect(chip).toHaveTextContent("acme/payments-service");
   });
 
   it("invokes onSelect and reflects selection", async () => {

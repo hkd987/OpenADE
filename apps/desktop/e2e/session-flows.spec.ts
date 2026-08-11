@@ -154,10 +154,12 @@ test("entity-launched sessions carry catalog context", async ({
     .fill("component:default/payments-api");
   await page.getByTestId("ns-submit").click();
 
-  // The card shows the entity, and the harness rules file received the
-  // context bundle built from the mock Backstage.
+  // The card shows the entity as a memory chip, and the harness rules file
+  // received the context bundle built from the mock Backstage.
   const card = page.locator(".session-card", { hasText: "entity task" });
-  await expect(card).toContainText("component:default/payments-api");
+  const chip = card.getByTestId("entity-chip");
+  await expect(chip).toContainText("component");
+  await expect(chip).toContainText("default/payments-api");
 
   const sessions = await (
     await request.get(`${daemon}/sessions?entity=component:default/payments-api`)
@@ -173,6 +175,44 @@ test("entity-launched sessions carry catalog context", async ({
   expect(rules).toContain("Payments Team");
   // Catalog MCP server auto-registered for the session.
   expect(fs.existsSync(path.join(worktree, ".mcp.json"))).toBeTruthy();
+});
+
+test("repo-entity sessions carry GitHub memory via the gh CLI", async ({
+  page,
+  request,
+}) => {
+  await page.goto("/");
+  await page.getByTestId("toggle-new-session").click();
+  await page.getByTestId("ns-title").fill("repo task");
+  await page.getByTestId("ns-repo").fill(repo);
+  await page.getByTestId("ns-entity").fill("repo:acme/checkout-service");
+  await page.getByTestId("ns-submit").click();
+
+  // The card shows the repo memory chip (kind highlighted).
+  const card = page.locator(".session-card", { hasText: "repo task" });
+  const chip = card.getByTestId("entity-chip");
+  await expect(chip).toContainText("repo");
+  await expect(chip).toContainText("acme/checkout-service");
+
+  // The worktree rules carry context built from the gh shim: repo
+  // description + CODEOWNERS-derived team ownership.
+  const sessions = await (
+    await request.get(`${daemon}/sessions?entity=repo:acme/checkout-service`)
+  ).json();
+  expect(sessions.sessions.length).toBe(1);
+  const meta = await (
+    await request.get(`${daemon}/sessions/${sessions.sessions[0].id}`)
+  ).json();
+  const rules = fs.readFileSync(
+    path.join(meta.worktree_path, "CLAUDE.md"),
+    "utf8",
+  );
+  expect(rules).toContain("acme/checkout-service");
+  expect(rules).toContain("Checkout flow service for the acme shop.");
+  expect(rules).toContain("group:acme/checkout-team");
+  expect(
+    fs.existsSync(path.join(meta.worktree_path, ".mcp.json")),
+  ).toBeTruthy();
 });
 
 test("a session waiting on input shows needs-input in the grid", async ({

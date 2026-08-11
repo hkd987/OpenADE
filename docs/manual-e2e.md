@@ -49,6 +49,20 @@ WebKitGTK window (not a browser) showing a running session in the grid:
 | 17 | Launch `openade-desktop` under Xvfb with no daemon | Window opens; UI renders with the "cannot reach daemon" banner (correct failure mode) |
 | 18 | Launch with a live daemon + session | Grid shows the running session in the native webview (screenshot above) |
 
+## GitHub memory source via the local gh CLI (verified)
+
+Re-run on 2026-08-11 against the release binaries with a `gh` shim on PATH
+standing in for the authenticated GitHub CLI (plus the mock Backstage). The
+screenshot above is from this pass — both memory chips visible.
+
+| # | Step | Result |
+|---|---|---|
+| 19 | Daemon startup source detection | Log shows `memory sources: github, backstage` with no GitHub-specific env set — `gh` auto-detected on PATH |
+| 20 | `repo:acme/checkout-service` session launch | `CLAUDE.md` carries "System context: acme/checkout-service" (kind repo, type Go), description, and CODEOWNERS-derived owner `group:acme/checkout-team` |
+| 21 | Backstage regression | `component:default/payments-api` session still injects "Payments Team" (Gemini rules file) |
+| 22 | `catalog-mcp` stdio with both sources | `get_owner(repo:…)` → team + user from CODEOWNERS; `get_techdocs_page(README.md)` → file content via `gh api`; `search_catalog("checkout")` → results from **both** sources merged; `get_entity(component:…)` still served by Backstage |
+| 23 | UI memory chips | Grid shows `component`-chip and green `repo`-chip cards side by side (screenshot above) |
+
 ## Not verifiable in this environment
 
 - The real `claude` / `codex` / `gemini` CLIs (no vendor credentials in the
@@ -56,6 +70,10 @@ WebKitGTK window (not a browser) showing a running session in the grid:
   [Phase 0 spike](phase-0-spike.md) run on a developer machine.
 - A production Backstage instance — the REST surface was mocked
   byte-for-byte per the API docs; `wiremock` tests cover the same paths.
+- A real authenticated `gh` CLI (no GitHub credentials in the container) —
+  the shim reproduces gh's documented JSON and error shapes; the provider's
+  fault paths are unit-tested against failing shims. Same gating as the
+  harness CLIs.
 
 ## Reproducing this pass
 

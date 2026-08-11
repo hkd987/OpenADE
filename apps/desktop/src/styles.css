@@ -169,6 +169,61 @@ body {
   white-space: nowrap;
 }
 
+/* Memory entity chip: the kind badge tells catalog (component/api/...) and
+   GitHub (repo) sources apart at a glance. */
+.entity-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  padding: 1px 7px 1px 1px;
+  border: 1px solid var(--border);
+  border-radius: 9999px;
+  background: var(--bg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.entity-kind {
+  padding: 0 6px;
+  border-radius: 9999px;
+  background: var(--border);
+  color: var(--text);
+  font-weight: 600;
+  letter-spacing: 0.03em;
+}
+
+.entity-chip-repo .entity-kind {
+  background: #1f3a2a;
+  color: #7ee2a8;
+}
+
+.form-hint {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.form-hint code {
+  font-size: 10px;
+  padding: 0 4px;
+}
+
+/* Sharp, consistent keyboard focus everywhere interactive. */
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+.session-card:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+  border-color: var(--accent);
+}
+
 .terminal-pane {
   min-width: 0;
   display: flex;

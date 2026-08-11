@@ -1,4 +1,4 @@
-import { harnessLabel, SessionMeta, timeAgo } from "../api";
+import { harnessLabel, SessionMeta, splitEntityRef, timeAgo } from "../api";
 
 export function SessionCard({
   session,
@@ -21,8 +21,16 @@ export function SessionCard({
       </div>
       <div className="session-title">{session.title}</div>
       {session.entity_ref && (
-        <div className="entity-ref" title="Catalog entity">
-          {session.entity_ref}
+        <div className="entity-ref" title="Memory entity">
+          <span
+            className={`entity-chip entity-chip-${splitEntityRef(session.entity_ref).kind}`}
+            data-testid="entity-chip"
+          >
+            <span className="entity-kind">
+              {splitEntityRef(session.entity_ref).kind}
+            </span>
+            {splitEntityRef(session.entity_ref).rest}
+          </span>
         </div>
       )}
       {session.branch && <div className="branch">{session.branch}</div>}
