@@ -23,6 +23,8 @@ pub struct TaskWorktree {
     pub path: PathBuf,
     /// The task branch checked out in the worktree.
     pub branch: String,
+    /// The commit the task branch forked from (diff base).
+    pub base_commit: String,
 }
 
 /// Errors from worktree operations.
@@ -105,11 +107,20 @@ impl WorktreeManager {
         let path = self.worktrees_root.join(&name);
         let path_str = path.to_string_lossy().into_owned();
 
+        let base_commit = self
+            .git(&self.repo_root, &["rev-parse", "HEAD"])?
+            .trim()
+            .to_string();
         self.git(
             &self.repo_root,
             &["worktree", "add", "-b", &branch, &path_str],
         )?;
-        Ok(TaskWorktree { name, path, branch })
+        Ok(TaskWorktree {
+            name,
+            path,
+            branch,
+            base_commit,
+        })
     }
 
     /// Whether a worktree has uncommitted changes (staged, unstaged, or
@@ -152,6 +163,25 @@ impl WorktreeManager {
     pub fn prune(&self) -> Result<(), WorktreeError> {
         self.git(&self.repo_root, &["worktree", "prune"])
             .map(|_| ())
+    }
+
+    /// The task's full diff: everything in the worktree (committed on the
+    /// task branch + staged + unstaged) relative to `base_commit`.
+    pub fn diff(&self, worktree_path: &Path, base_commit: &str) -> Result<String, WorktreeError> {
+        self.git(worktree_path, &["diff", base_commit])
+    }
+
+    /// Files present in a worktree: tracked plus untracked-but-not-ignored,
+    /// sorted, repo-relative.
+    pub fn files(&self, worktree_path: &Path) -> Result<Vec<String>, WorktreeError> {
+        let out = self.git(
+            worktree_path,
+            &["ls-files", "--cached", "--others", "--exclude-standard"],
+        )?;
+        let mut files: Vec<String> = out.lines().map(str::to_string).collect();
+        files.sort();
+        files.dedup();
+        Ok(files)
     }
 }
 
@@ -264,5 +294,51 @@ mod tests {
         assert!(!mgr.is_dirty(&wt.path).unwrap());
         mgr.remove(&wt.path, false).unwrap();
         assert!(!wt.path.exists());
+    }
+
+    #[test]
+    fn diff_covers_uncommitted_and_committed_task_work() {
+        let (_tmp, mgr) = manager();
+        let wt = mgr.create("diff me").unwrap();
+        assert!(!wt.base_commit.is_empty());
+
+        // A fresh worktree has no diff vs its base.
+        assert!(mgr.diff(&wt.path, &wt.base_commit).unwrap().is_empty());
+
+        // Uncommitted edit to a tracked file shows up.
+        fs::write(wt.path.join("README.md"), "hello\nplus a change\n").unwrap();
+        let diff = mgr.diff(&wt.path, &wt.base_commit).unwrap();
+        assert!(diff.contains("+plus a change"));
+
+        // Commit it on the task branch — still diffed against the fork point.
+        let run = |args: &[&str]| {
+            let st = Command::new("git")
+                .arg("-C")
+                .arg(&wt.path)
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(st.status.success());
+        };
+        run(&["config", "user.email", "t@example.com"]);
+        run(&["config", "user.name", "T"]);
+        run(&["commit", "-am", "task work"]);
+        let diff = mgr.diff(&wt.path, &wt.base_commit).unwrap();
+        assert!(diff.contains("+plus a change"));
+    }
+
+    #[test]
+    fn files_lists_tracked_and_untracked_but_not_ignored() {
+        let (_tmp, mgr) = manager();
+        let wt = mgr.create("browse me").unwrap();
+        fs::write(wt.path.join("new-file.txt"), "x").unwrap();
+        fs::write(wt.path.join(".gitignore"), "ignored.log\n").unwrap();
+        fs::write(wt.path.join("ignored.log"), "x").unwrap();
+
+        let files = mgr.files(&wt.path).unwrap();
+        assert!(files.contains(&"README.md".to_string()));
+        assert!(files.contains(&"new-file.txt".to_string()));
+        assert!(files.contains(&".gitignore".to_string()));
+        assert!(!files.iter().any(|f| f == "ignored.log"));
     }
 }

@@ -51,6 +51,9 @@ pub struct SessionMeta {
     /// The task branch checked out in the worktree.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub branch: Option<String>,
+    /// The commit the task branch forked from (base for diff views).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_commit: Option<String>,
     /// Catalog entity this session was launched from, if any
     /// (e.g. `component:default/payments-api`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -72,6 +75,7 @@ impl SessionMeta {
             repo_root: repo_root.into(),
             worktree_path: None,
             branch: None,
+            base_commit: None,
             entity_ref: None,
             state: SessionState::Idle,
             created_at: now,

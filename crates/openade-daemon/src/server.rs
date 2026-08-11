@@ -26,6 +26,9 @@ pub fn router(daemon: Arc<Daemon>) -> Router {
         .route("/sessions/{id}/scrollback", get(get_scrollback))
         .route("/sessions/{id}/input", post(post_input))
         .route("/sessions/{id}/worktree", delete(delete_worktree))
+        .route("/sessions/{id}/diff", get(get_diff))
+        .route("/sessions/{id}/files", get(get_files))
+        .route("/projects", get(list_projects))
         .with_state(daemon)
 }
 
@@ -80,6 +83,30 @@ async fn get_scrollback(
 ) -> Result<impl IntoResponse, ApiError> {
     let text = daemon.scrollback(id)?;
     Ok(Json(serde_json::json!({ "scrollback": text })))
+}
+
+async fn get_diff(
+    State(daemon): State<Arc<Daemon>>,
+    Path(id): Path<Uuid>,
+) -> Result<impl IntoResponse, ApiError> {
+    let diff = tokio::task::spawn_blocking(move || daemon.diff(id))
+        .await
+        .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))??;
+    Ok(Json(serde_json::json!({ "diff": diff })))
+}
+
+async fn get_files(
+    State(daemon): State<Arc<Daemon>>,
+    Path(id): Path<Uuid>,
+) -> Result<impl IntoResponse, ApiError> {
+    let files = tokio::task::spawn_blocking(move || daemon.files(id))
+        .await
+        .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))??;
+    Ok(Json(serde_json::json!({ "files": files })))
+}
+
+async fn list_projects(State(daemon): State<Arc<Daemon>>) -> Result<impl IntoResponse, ApiError> {
+    Ok(Json(serde_json::json!({ "projects": daemon.projects()? })))
 }
 
 #[derive(Deserialize)]

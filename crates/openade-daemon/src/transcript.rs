@@ -66,6 +66,7 @@ pub struct SessionRecord {
     pub id: Uuid,
     pub title: String,
     pub harness: String,
+    pub repo_root: PathBuf,
     pub entity_ref: Option<String>,
     pub state: String,
     pub started_at: DateTime<Utc>,
@@ -103,6 +104,7 @@ impl TranscriptStore {
                  id              TEXT PRIMARY KEY,
                  title           TEXT NOT NULL,
                  harness         TEXT NOT NULL,
+                 repo_root       TEXT NOT NULL DEFAULT '',
                  entity_ref      TEXT,
                  state           TEXT NOT NULL,
                  started_at      TEXT NOT NULL,
@@ -118,6 +120,12 @@ impl TranscriptStore {
              );
              CREATE INDEX IF NOT EXISTS idx_sessions_entity ON sessions(entity_ref);",
         )?;
+        // Pre-alpha migration: add repo_root to indexes created before it
+        // existed. ALTER TABLE ADD COLUMN is a no-op error when present.
+        let has_repo_root = db.prepare("SELECT repo_root FROM sessions LIMIT 1").is_ok();
+        if !has_repo_root {
+            db.execute_batch("ALTER TABLE sessions ADD COLUMN repo_root TEXT NOT NULL DEFAULT ''")?;
+        }
         Ok(TranscriptStore {
             dir,
             db: Mutex::new(db),
@@ -134,12 +142,13 @@ impl TranscriptStore {
         File::create(&path)?;
         let db = self.db.lock().expect("db lock");
         db.execute(
-            "INSERT INTO sessions (id, title, harness, entity_ref, state, started_at, transcript_path)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            "INSERT INTO sessions (id, title, harness, repo_root, entity_ref, state, started_at, transcript_path)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             params![
                 meta.id.to_string(),
                 meta.title,
                 meta.harness.id(),
+                meta.repo_root.to_string_lossy(),
                 meta.entity_ref,
                 state_str(meta.state),
                 meta.created_at.to_rfc3339(),
@@ -254,6 +263,22 @@ impl TranscriptStore {
         )
     }
 
+    /// Distinct repositories sessions have been launched in, most recently
+    /// used first (feeds the project list in the UI).
+    pub fn projects(&self) -> Result<Vec<PathBuf>, TranscriptError> {
+        let db = self.db.lock().expect("db lock");
+        let mut stmt = db.prepare(
+            "SELECT repo_root, MAX(started_at) AS last_used FROM sessions
+             WHERE repo_root != '' GROUP BY repo_root ORDER BY last_used DESC",
+        )?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(PathBuf::from(row?));
+        }
+        Ok(out)
+    }
+
     /// Read a session's full transcript back from JSONL.
     pub fn read_transcript(&self, session_id: Uuid) -> Result<Vec<SessionEvent>, TranscriptError> {
         let path = self.transcript_path(session_id);
@@ -296,10 +321,12 @@ fn row_to_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<SessionRecord> {
     let started: String = row.get("started_at")?;
     let ended: Option<String> = row.get("ended_at")?;
     let path: String = row.get("transcript_path")?;
+    let repo_root: String = row.get("repo_root")?;
     Ok(SessionRecord {
         id: id.parse().unwrap_or_default(),
         title: row.get("title")?,
         harness: row.get("harness")?,
+        repo_root: PathBuf::from(repo_root),
         entity_ref: row.get("entity_ref")?,
         state: row.get("state")?,
         started_at: parse_ts(&started),
@@ -411,6 +438,27 @@ mod tests {
         assert!(payments
             .iter()
             .all(|r| r.entity_ref.as_deref() == Some("component:default/payments-api")));
+    }
+
+    #[test]
+    fn projects_lists_distinct_repos_most_recent_first() {
+        let (_tmp, store) = store();
+        let older = SessionMeta::new("first", Harness::ClaudeCode, "/repos/alpha");
+        store.begin_session(&older).unwrap();
+        let mut mid = SessionMeta::new("second", Harness::CodexCli, "/repos/beta");
+        mid.created_at = older.created_at + chrono::Duration::seconds(1);
+        store.begin_session(&mid).unwrap();
+        let mut newer = SessionMeta::new("third", Harness::GeminiCli, "/repos/alpha");
+        newer.created_at = older.created_at + chrono::Duration::seconds(2);
+        store.begin_session(&newer).unwrap();
+
+        let projects = store.projects().unwrap();
+        assert_eq!(
+            projects,
+            vec![PathBuf::from("/repos/alpha"), PathBuf::from("/repos/beta")]
+        );
+        let all = store.list_sessions().unwrap();
+        assert_eq!(all[0].repo_root, PathBuf::from("/repos/alpha"));
     }
 
     #[test]

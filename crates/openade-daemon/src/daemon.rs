@@ -102,6 +102,7 @@ impl Daemon {
         let wt = mgr.create(&req.title)?;
         meta.worktree_path = Some(wt.path.clone());
         meta.branch = Some(wt.branch.clone());
+        meta.base_commit = Some(wt.base_commit.clone());
 
         // R4: same rules for every harness. A project without a canonical
         // rules source is fine — the harness just runs with its own defaults.
@@ -240,6 +241,33 @@ impl Daemon {
         mgr.remove(&wt, force)?;
         Ok(())
     }
+
+    /// The session's task diff: worktree state (committed + uncommitted)
+    /// against the commit the task branch forked from (R3 diff view).
+    pub fn diff(&self, id: Uuid) -> Result<String, DaemonError> {
+        let meta = self.get(id)?;
+        let (Some(wt), Some(base)) = (meta.worktree_path.as_ref(), meta.base_commit.as_ref())
+        else {
+            return Ok(String::new());
+        };
+        let mgr = self.worktree_manager(&meta.repo_root);
+        Ok(mgr.diff(wt, base)?)
+    }
+
+    /// Files in the session's worktree (R3 file browser).
+    pub fn files(&self, id: Uuid) -> Result<Vec<String>, DaemonError> {
+        let meta = self.get(id)?;
+        let Some(wt) = meta.worktree_path.as_ref() else {
+            return Ok(Vec::new());
+        };
+        let mgr = self.worktree_manager(&meta.repo_root);
+        Ok(mgr.files(wt)?)
+    }
+
+    /// Repositories sessions have been launched in (R3 project list).
+    pub fn projects(&self) -> Result<Vec<PathBuf>, DaemonError> {
+        Ok(self.store.projects()?)
+    }
 }
 
 #[cfg(test)]
@@ -370,6 +398,24 @@ mod tests {
         ));
         daemon.cleanup_worktree(meta.id, true).unwrap();
         assert!(!wt.exists());
+    }
+
+    #[test]
+    fn diff_files_and_projects_are_exposed() {
+        let (_tmp, daemon, repo) = setup();
+        let meta = daemon.launch(launch_req(&repo, "true")).unwrap();
+        wait_state(&daemon, meta.id, SessionState::Completed);
+
+        let wt = meta.worktree_path.clone().unwrap();
+        std::fs::write(wt.join("README.md"), "hi\nagent was here\n").unwrap();
+
+        let diff = daemon.diff(meta.id).unwrap();
+        assert!(diff.contains("+agent was here"), "{diff}");
+
+        let files = daemon.files(meta.id).unwrap();
+        assert!(files.contains(&"README.md".to_string()));
+
+        assert_eq!(daemon.projects().unwrap(), vec![repo]);
     }
 
     #[test]
