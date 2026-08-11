@@ -23,16 +23,20 @@ async fn main() -> anyhow::Result<()> {
         .unwrap_or(7433);
 
     let mut daemon = Daemon::open(&data_dir)?;
-    // A configured Backstage means entity-launched sessions get context
-    // bundles + catalog MCP registration; without one the daemon is a plain
-    // (still fully functional) session manager.
-    match catalog_mcp::backstage::BackstageConfig::from_env() {
-        Ok(config) => {
-            tracing::info!("catalog: Backstage at {}", config.base_url);
-            daemon = daemon.with_catalog(Arc::new(catalog_mcp::BackstageProvider::new(config)));
+    // Configured memory sources mean entity-launched sessions get context
+    // bundles + catalog MCP registration; without any the daemon is a plain
+    // (still fully functional) session manager. Sources: Backstage
+    // (BACKSTAGE_BASE_URL) and/or GitHub via the user's local gh CLI.
+    match catalog_mcp::MemoryRouter::from_env() {
+        Some(router) => {
+            tracing::info!("memory sources: {}", router.source_names().join(", "));
+            daemon = daemon.with_catalog(Arc::new(router));
         }
-        Err(_) => {
-            tracing::info!("catalog: none (set BACKSTAGE_BASE_URL to enable context bundles)");
+        None => {
+            tracing::info!(
+                "memory sources: none (set BACKSTAGE_BASE_URL and/or install the gh CLI \
+                 to enable context bundles)"
+            );
         }
     }
     let daemon = Arc::new(daemon);

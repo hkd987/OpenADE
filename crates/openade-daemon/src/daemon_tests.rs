@@ -393,6 +393,38 @@ async fn entity_launch_injects_context_bundle() {
 }
 
 #[tokio::test]
+async fn repo_entity_launch_injects_github_memory_context() {
+    // A `repo:owner/name` ref (the GitHub memory source) flows through the
+    // same bundle pipeline as catalog entities.
+    let tmp = TempDir::new().unwrap();
+    let repo = tmp.path().join("repo");
+    std::fs::create_dir(&repo).unwrap();
+    init_repo(&repo);
+    let daemon = daemon_with_catalog(&tmp);
+
+    let mut req = launch_req(&repo, "true");
+    req.entity_ref = Some("repo:acme/payments-service".into());
+    let bundle = daemon.build_bundle("repo:acme/payments-service").await;
+    assert!(bundle.is_some());
+
+    let meta = daemon.launch(req, bundle).unwrap();
+    let wt = meta.worktree_path.clone().unwrap();
+
+    let rules = std::fs::read_to_string(wt.join("CLAUDE.md")).unwrap();
+    assert!(rules.contains("acme/payments-service"), "{rules}");
+    assert!(rules.contains("Payments service repository on GitHub."));
+    // CODEOWNERS-derived team ownership carried into the bundle (the group
+    // entity is unresolvable in the graph, so the bare ref is kept).
+    assert!(rules.contains("group:acme/payments-team"), "{rules}");
+
+    let json: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(wt.join(".openade/context.json")).unwrap())
+            .unwrap();
+    assert_eq!(json["entity"]["entity_ref"], "repo:acme/payments-service");
+    assert_eq!(json["entity"]["kind"], "repo");
+}
+
+#[tokio::test]
 async fn prior_session_outcomes_feed_the_next_bundle() {
     let tmp = TempDir::new().unwrap();
     let repo = tmp.path().join("repo");

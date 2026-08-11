@@ -9,10 +9,14 @@
 
 pub mod backstage;
 pub mod bundle;
+pub mod github;
 pub mod mcp;
 pub mod provider;
+pub mod router;
 #[cfg(any(test, feature = "mock"))]
 pub mod testutil;
 
 pub use backstage::BackstageProvider;
+pub use github::GithubProvider;
 pub use provider::{CatalogProvider, Entity, EntityRef, ProviderError};
+pub use router::MemoryRouter;

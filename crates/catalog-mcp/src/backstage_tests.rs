@@ -108,8 +108,10 @@ async fn search_uses_full_text_filter() {
 
 #[test]
 fn config_from_env_requires_base_url() {
-    // Env-var access is process-global; this is the only test touching
-    // these variables.
+    // Env-var access is process-global; serialize with the other env tests.
+    let _guard = crate::testutil::ENV_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     std::env::remove_var("BACKSTAGE_BASE_URL");
     std::env::remove_var("BACKSTAGE_TOKEN");
     assert!(BackstageConfig::from_env().is_err());

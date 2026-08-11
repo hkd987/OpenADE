@@ -1,5 +1,11 @@
 //! In-memory [`CatalogProvider`] used by unit tests across the crate.
 
+/// Serializes tests that mutate process-global environment variables
+/// (`BACKSTAGE_*`, `OPENADE_GH_BIN`, `OPENADE_GITHUB_MEMORY`). Lock it in
+/// every test that touches env config; `lock().unwrap_or_else` tolerates
+/// poisoning from a failed test.
+pub static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 use std::collections::HashMap;
 
 use async_trait::async_trait;
@@ -83,6 +89,38 @@ impl MockProvider {
                 },
                 spec: serde_json::json!({"type": "service"}),
                 relations: vec![],
+            },
+        );
+        // A GitHub-shaped repo entity, as the `gh`-backed source would build
+        // it (CODEOWNERS-derived team + user ownership).
+        entities.insert(
+            "repo:acme/payments-service".into(),
+            Entity {
+                api_version: "openade.dev/github-v1".into(),
+                kind: "repo".into(),
+                metadata: EntityMetadata {
+                    name: "payments-service".into(),
+                    namespace: Some("acme".into()),
+                    title: Some("acme/payments-service".into()),
+                    description: Some("Payments service repository on GitHub.".into()),
+                    tags: vec!["payments".into()],
+                    links: vec![EntityLink {
+                        url: "https://github.com/acme/payments-service".into(),
+                        title: Some("Repository".into()),
+                    }],
+                    ..Default::default()
+                },
+                spec: serde_json::json!({"type": "Rust", "lifecycle": "active", "default_branch": "main"}),
+                relations: vec![
+                    Relation {
+                        relation_type: "ownedBy".into(),
+                        target_ref: "group:acme/payments-team".into(),
+                    },
+                    Relation {
+                        relation_type: "ownedBy".into(),
+                        target_ref: "user:github/lundin".into(),
+                    },
+                ],
             },
         );
         MockProvider { entities }
