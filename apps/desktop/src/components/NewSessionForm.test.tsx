@@ -55,11 +55,13 @@ describe("NewSessionForm", () => {
       screen.getByTestId("ns-entity"),
       "component:default/ledger",
     );
+    await userEvent.selectOptions(screen.getByTestId("ns-checkout"), "main");
     await userEvent.click(screen.getByTestId("ns-submit"));
 
     await waitFor(() => expect(onCreated).toHaveBeenCalledWith({ id: "new-1", state: "running" }));
     expect(createSession).toHaveBeenCalledWith({
       title: "fix the bug",
+      checkout: "main",
       harness: "gemini-cli",
       repo_root: "/repos/alpha",
       entity_ref: "component:default/ledger",
@@ -81,6 +83,7 @@ describe("NewSessionForm", () => {
     await waitFor(() => expect(onCreated).toHaveBeenCalled());
     expect(createSession).toHaveBeenCalledWith({
       title: "manual task",
+      checkout: "worktree",
       harness: "claude-code",
       repo_root: "/typed/repo",
       entity_ref: undefined,

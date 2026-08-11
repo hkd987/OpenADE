@@ -4,10 +4,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { SessionMeta } from "../api";
 import { SessionDetail } from "./SessionDetail";
 
-const { getDiff, getFiles, handoffSession, killSession, publishArtifact } =
+const { getDiff, getFiles,
+  getFileContent,
+  getSkills, handoffSession, killSession, publishArtifact } =
   vi.hoisted(() => ({
     getDiff: vi.fn(),
     getFiles: vi.fn(),
+    getFileContent: vi.fn(),
+    getSkills: vi.fn(),
     handoffSession: vi.fn(),
     killSession: vi.fn(),
     publishArtifact: vi.fn(),
@@ -17,6 +21,8 @@ vi.mock("../api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../api")>()),
   getDiff,
   getFiles,
+  getFileContent,
+  getSkills,
   handoffSession,
   killSession,
   publishArtifact,
@@ -142,5 +148,59 @@ describe("SessionDetail", () => {
     getFiles.mockRejectedValue(new Error("files boom"));
     await userEvent.click(screen.getByTestId("tab-files"));
     expect(await screen.findByRole("alert")).toHaveTextContent("files boom");
+  });
+
+  it("files tab opens a read-only viewer; rules and skills tabs list their sources", async () => {
+    getFiles.mockResolvedValue({ files: ["README.md", "CLAUDE.md"] });
+    getFileContent.mockResolvedValue({ path: "CLAUDE.md", content: "# Rules body" });
+    getSkills.mockResolvedValue({
+      skills: [{ name: "release", path: ".claude/skills/release/SKILL.md", description: "Cut a release." }],
+    });
+    render(<SessionDetail session={session} onChanged={vi.fn()} />);
+
+    await userEvent.click(screen.getByTestId("tab-files"));
+    await userEvent.click(await screen.findByText("README.md"));
+    expect(await screen.findByTestId("file-viewer")).toHaveTextContent("# Rules body");
+    await userEvent.click(screen.getByTestId("file-viewer-back"));
+    expect(screen.queryByTestId("file-viewer")).toBeNull();
+
+    // Rules tab filters to instruction files only, and opens the viewer.
+    await userEvent.click(screen.getByTestId("tab-rules"));
+    const rules = await screen.findByTestId("rules-list");
+    expect(rules).toHaveTextContent("CLAUDE.md");
+    expect(rules).not.toHaveTextContent("README.md");
+    await userEvent.click(screen.getByText("CLAUDE.md"));
+    expect(await screen.findByTestId("file-viewer")).toBeInTheDocument();
+    await userEvent.click(screen.getByTestId("file-viewer-back"));
+
+    // Skills tab lists discovered skills; clicking opens the skill file.
+    await userEvent.click(screen.getByTestId("tab-skills"));
+    const skills = await screen.findByTestId("skills-list");
+    expect(skills).toHaveTextContent("release");
+    expect(skills).toHaveTextContent("Cut a release.");
+    await userEvent.click(screen.getByText("release"));
+    expect(await screen.findByTestId("file-viewer")).toBeInTheDocument();
+  });
+
+  it("rules and skills tabs explain themselves when empty", async () => {
+    getFiles.mockResolvedValue({ files: ["README.md"] });
+    getSkills.mockResolvedValue({ skills: [] });
+    render(<SessionDetail session={session} onChanged={vi.fn()} />);
+    await userEvent.click(screen.getByTestId("tab-rules"));
+    expect(await screen.findByTestId("rules-list")).toHaveTextContent("No rules files");
+    await userEvent.click(screen.getByTestId("tab-skills"));
+    expect(await screen.findByTestId("skills-list")).toHaveTextContent("No skills discovered");
+  });
+
+  it("surfaces skills and file-content errors", async () => {
+    getSkills.mockRejectedValue(new Error("skills boom"));
+    render(<SessionDetail session={session} onChanged={vi.fn()} />);
+    await userEvent.click(screen.getByTestId("tab-skills"));
+    expect(await screen.findByRole("alert")).toHaveTextContent("skills boom");
+
+    getFileContent.mockRejectedValue(new Error("read boom"));
+    await userEvent.click(screen.getByTestId("tab-files"));
+    await userEvent.click(await screen.findByText("README.md"));
+    expect(await screen.findByRole("alert")).toHaveTextContent("read boom");
   });
 });

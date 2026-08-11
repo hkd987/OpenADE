@@ -62,6 +62,14 @@ impl WorktreeManager {
         &self.repo_root
     }
 
+    /// The repository's current branch name and HEAD commit — the base a
+    /// main-checkout session records instead of creating a worktree.
+    pub fn current_branch_and_head(&self) -> Result<(String, String), WorktreeError> {
+        let branch = self.git(&self.repo_root, &["rev-parse", "--abbrev-ref", "HEAD"])?;
+        let head = self.git(&self.repo_root, &["rev-parse", "HEAD"])?;
+        Ok((branch.trim().to_string(), head.trim().to_string()))
+    }
+
     fn git(&self, cwd: &Path, args: &[&str]) -> Result<String, WorktreeError> {
         let output = Command::new("git").arg("-C").arg(cwd).args(args).output()?;
         if output.status.success() {

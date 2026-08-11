@@ -54,3 +54,21 @@ terminal — OpenADE's PTY renders the same thing when the real CLI runs
   the primary label with the generated branch as secondary metadata.
 - **Docs are Git-reviewed**, not auto-published: our index and artifacts land
   on `openade/knowledge-*` review branches (PRD R6 human-in-the-loop).
+
+
+## Docs audit (backstage.spotify.com/docs/xirp, 2026-08-11)
+
+Full parity sweep against the published Xirp documentation. Implemented in
+v0.2.0: **checkout mode** (main checkout or new worktree per session, with
+the main checkout protected from cleanup), **Files tab click-to-view**
+(read-only, traversal-guarded), **Rules tab** (materialized instruction
+files), **Skills tab** (`.claude/skills/*/SKILL.md` + `.openade/skills/*.md`
+discovery), **PR monitoring** (`gh pr list` per project card), **goal box**
+(describe an outcome on a project card → session launches immediately), and
+**cards/compact grid layouts**. Xirp's Portal/Workspace platform features
+(wiki pages, records, members, Linear/Drive integrations) map to our
+open equivalents: the Backstage catalog is the entity/context layer and the
+shared team memory repo is the uploaded-session hub — both already wired
+through MCP. Remaining deliberate differences: projects are session-derived
+(no separate registration/pin/rename), and the operator file *editor* is
+out of scope (agents edit; the operator reviews).

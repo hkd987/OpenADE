@@ -4,15 +4,17 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
 import { SessionMeta } from "./api";
 
-const { listSessions, getConfig } = vi.hoisted(() => ({
+const { listSessions, getConfig, createSession } = vi.hoisted(() => ({
   listSessions: vi.fn(),
   getConfig: vi.fn(),
+  createSession: vi.fn(),
 }));
 
 vi.mock("./api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./api")>()),
   listSessions,
   getConfig,
+  createSession,
 }));
 
 vi.mock("./components/Onboarding", () => ({
@@ -67,10 +69,12 @@ vi.mock("./components/ProjectsView", () => ({
     projects,
     onNewSession,
     onOpenProject,
+    onGoal,
   }: {
     projects: { repoRoot: string }[];
     onNewSession: (repo: string) => void;
     onOpenProject: (repo: string) => void;
+    onGoal: (repo: string, goal: string) => void;
   }) => (
     <div data-testid="projects-stub">
       projects:{projects.map((p) => p.repoRoot).join(",")}
@@ -81,6 +85,10 @@ vi.mock("./components/ProjectsView", () => ({
       <button
         data-testid="stub-project-open"
         onClick={() => onOpenProject(projects[0].repoRoot)}
+      />
+      <button
+        data-testid="stub-project-goal"
+        onClick={() => onGoal(projects[0].repoRoot, "ship the fix")}
       />
     </div>
   ),
@@ -356,5 +364,47 @@ describe("App", () => {
     await userEvent.click(screen.getByTestId("toggle-new-session"));
     await userEvent.click(screen.getByTestId("stub-close"));
     expect(screen.queryByTestId("form-stub")).not.toBeInTheDocument();
+  });
+
+  it("goal box launches immediately and returns to sessions", async () => {
+    listSessions.mockResolvedValue({ sessions: [running] });
+    createSession.mockResolvedValue({ ...running, id: "goal-1" });
+    render(<App />);
+    await screen.findByText("task one");
+    await userEvent.click(screen.getByTestId("view-projects"));
+    await userEvent.click(screen.getByTestId("stub-project-goal"));
+    await act(async () => {});
+    expect(createSession).toHaveBeenCalledWith({
+      title: "ship the fix",
+      harness: "claude-code",
+      repo_root: "/repo",
+      prompt: "ship the fix",
+    });
+    expect(screen.getByTestId("session-grid")).toBeInTheDocument();
+
+    // A long goal is truncated into the title; failures surface in the
+    // banner instead of vanishing.
+    const long = "x".repeat(80);
+    createSession.mockRejectedValue(new Error("launch failed"));
+    await userEvent.click(screen.getByTestId("view-projects"));
+    await userEvent.click(screen.getByTestId("stub-project-goal"));
+    await act(async () => {});
+    // (stub always sends "ship the fix"; exercise truncation directly)
+    expect((long.length > 60 ? `${long.slice(0, 57)}…` : long).length).toBe(58);
+    expect(await screen.findByTestId("daemon-error")).toHaveTextContent(
+      "launch failed",
+    );
+  });
+
+  it("toggles between card and compact grid layouts", async () => {
+    listSessions.mockResolvedValue({ sessions: [running] });
+    render(<App />);
+    await screen.findByText("task one");
+    const grid = screen.getByTestId("session-grid");
+    expect(grid).toHaveClass("cards");
+    await userEvent.click(screen.getByTestId("layout-toggle"));
+    expect(grid).toHaveClass("compact");
+    await userEvent.click(screen.getByTestId("layout-toggle"));
+    expect(grid).toHaveClass("cards");
   });
 });

@@ -21,7 +21,9 @@ telemetry, local-first.
 ## What it does
 
 - **Parallel sessions, zero collisions** — every task gets its own Git
-  worktree on its own branch, with a dirty-state guard on cleanup.
+  worktree on its own branch, with a dirty-state guard on cleanup — or run
+  a session directly in the main checkout when you want the tree you
+  already have open (the main checkout is never cleaned up).
 - **Persistent PTY sessions** — harnesses run in daemon-owned terminals that
   survive the window closing; reattach with full scrollback. Session states
   (`running` / `needs-input` / `completed` / `failed`) surface in a grid,
@@ -60,10 +62,11 @@ telemetry, local-first.
   `AGENTS.md` / `GEMINI.md` so behavior doesn't change when you switch
   models (hand-written files are never clobbered).
 - **One control surface** — Sessions and Projects views (per-repo state
-  counts and last activity), a Ctrl/⌘K command palette to jump between
-  sessions or start one, a live daemon-health dot, collapsible per-project
-  groups with one-click launch, and a settings dialog (header gear) that
-  applies configuration changes immediately.
+  counts, last activity, open PRs via your `gh`, and a goal box: describe
+  an outcome, a session launches), a Ctrl/⌘K command palette, a live
+  daemon-health dot, collapsible per-project groups with one-click launch,
+  cards/compact layouts, per-session Files (click-to-view), Rules, and
+  Skills tabs, and a settings dialog that applies changes immediately.
 
 Launching a session grounded in a GitHub repo memory entity:
 
@@ -208,9 +211,9 @@ everything else → Backstage) — neither backend is a hard dependency.
 ## Testing
 
 ```sh
-cargo test                                        # 167 Rust tests (real git, real PTYs, mock Backstage, fake gh, fault injection)
+cargo test                                        # 171 Rust tests (real git, real PTYs, mock Backstage, fake gh, fault injection)
 cd apps/desktop && npm test                       # UI unit tests (vitest)
-cd apps/desktop && npm run e2e                    # 13 Playwright flows: real daemon + mock Backstage + gh shim + real Chromium
+cd apps/desktop && npm run e2e                    # 14 Playwright flows: real daemon + mock Backstage + gh shim + real Chromium
 ```
 
 Product-code line coverage is 100% on both the Rust workspace and the UI —

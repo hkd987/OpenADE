@@ -42,6 +42,7 @@ fn launch_req(repo: &std::path::Path, cmd: &str) -> LaunchSessionRequest {
         title: "test task".into(),
         harness: Harness::ClaudeCode,
         repo_root: repo.to_path_buf(),
+        checkout: CheckoutMode::default(),
         entity_ref: Some("component:default/demo".into()),
         prompt: Some("do the thing".into()),
         mcp_servers: vec![],
@@ -108,6 +109,148 @@ fn parallel_sessions_get_isolated_worktrees() {
     for m in &metas {
         daemon.kill(m.id).unwrap();
     }
+}
+
+#[test]
+fn main_checkout_sessions_run_in_the_repo_without_a_worktree() {
+    let (tmp, daemon, repo) = setup();
+    let mut req = launch_req(&repo, "true");
+    req.checkout = CheckoutMode::Main;
+    let meta = daemon.launch(req, None).unwrap();
+    wait_state(&daemon, meta.id, SessionState::Completed);
+
+    // The working directory IS the repository, on its current branch.
+    assert_eq!(meta.worktree_path.as_deref(), Some(repo.as_path()));
+    assert_eq!(meta.branch.as_deref(), Some("main"));
+    assert!(meta.base_commit.is_some());
+    // No worktree directory was created.
+    assert!(!tmp.path().join("data/worktrees/repo").exists());
+
+    // Diff and files work against the main checkout.
+    std::fs::write(repo.join("README.md"), "hi\nmain checkout edit\n").unwrap();
+    assert!(daemon
+        .diff(meta.id)
+        .unwrap()
+        .contains("+main checkout edit"));
+    assert!(daemon
+        .files(meta.id)
+        .unwrap()
+        .contains(&"README.md".to_string()));
+
+    // Cleanup must refuse: the "worktree" is the user's repository.
+    let err = daemon.cleanup_worktree(meta.id, true).unwrap_err();
+    assert!(matches!(err, DaemonError::MainCheckout));
+    assert!(repo.exists());
+    std::fs::write(repo.join("README.md"), "hi\n").unwrap();
+}
+
+#[test]
+fn workdir_files_are_readable_but_never_outside_the_worktree() {
+    let (_tmp, daemon, repo) = setup();
+    let meta = daemon.launch(launch_req(&repo, "true"), None).unwrap();
+    wait_state(&daemon, meta.id, SessionState::Completed);
+
+    let content = daemon.read_workdir_file(meta.id, "README.md").unwrap();
+    assert_eq!(content, "hi\n");
+    // Leading slash is tolerated (treated as worktree-relative).
+    assert!(daemon.read_workdir_file(meta.id, "/README.md").is_ok());
+
+    // Missing file and path traversal are both NotFound.
+    assert!(daemon.read_workdir_file(meta.id, "nope.md").is_err());
+    assert!(daemon
+        .read_workdir_file(meta.id, "../../../etc/passwd")
+        .is_err());
+    // A canonicalizable escape and a directory are rejected on the same
+    // guard: outside the worktree, or not a regular file.
+    let wt = meta.worktree_path.clone().unwrap();
+    std::fs::write(wt.parent().unwrap().join("escape.txt"), "secret").unwrap();
+    assert!(daemon.read_workdir_file(meta.id, "../escape.txt").is_err());
+    assert!(daemon.read_workdir_file(meta.id, ".openade").is_err());
+}
+
+#[test]
+fn skills_are_discovered_from_both_conventions() {
+    let (_tmp, daemon, repo) = setup();
+    let meta = daemon.launch(launch_req(&repo, "true"), None).unwrap();
+    wait_state(&daemon, meta.id, SessionState::Completed);
+    let wt = meta.worktree_path.clone().unwrap();
+
+    // No skill folders → empty, not an error.
+    assert!(daemon.skills(meta.id).unwrap().is_empty());
+
+    std::fs::create_dir_all(wt.join(".claude/skills/release")).unwrap();
+    std::fs::write(
+        wt.join(".claude/skills/release/SKILL.md"),
+        "---\nname: release\n---\n# Release\n\nCut and publish a release.\n",
+    )
+    .unwrap();
+    std::fs::create_dir_all(wt.join(".openade/skills")).unwrap();
+    std::fs::write(
+        wt.join(".openade/skills/migrate.md"),
+        "# Migrate\nRun the schema migration playbook.\n",
+    )
+    .unwrap();
+    // A skill dir without SKILL.md is skipped.
+    std::fs::create_dir_all(wt.join(".claude/skills/empty")).unwrap();
+
+    let skills = daemon.skills(meta.id).unwrap();
+    assert_eq!(skills.len(), 2);
+    assert_eq!(skills[0]["name"], "migrate");
+    assert_eq!(
+        skills[0]["description"],
+        "Run the schema migration playbook."
+    );
+    assert_eq!(skills[1]["name"], "release");
+    assert_eq!(skills[1]["description"], "Cut and publish a release.");
+}
+
+#[test]
+fn pull_requests_report_via_gh_and_degrade_without_it() {
+    let _guard = catalog_mcp::testutil::ENV_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let tmp = TempDir::new().unwrap();
+
+    // A gh shim that serves `pr list`.
+    let shim = tmp.path().join("gh");
+    std::fs::write(
+        &shim,
+        "#!/bin/sh\ncase \"$*\" in\n  \"pr list\"*) printf '[{\"number\":7,\"title\":\"Add retries\",\"url\":\"https://github.com/acme/x/pull/7\",\"headRefName\":\"retries\",\"isDraft\":false}]' ;;\n  *) echo 'gh: Not Found (HTTP 404)' >&2; exit 1 ;;\nesac\n",
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    std::env::set_var("OPENADE_GH_BIN", &shim);
+    std::env::remove_var("OPENADE_GITHUB_MEMORY");
+    let result = Daemon::pull_requests(tmp.path());
+    assert_eq!(result["prs"][0]["number"], 7);
+    assert_eq!(result["prs"][0]["title"], "Add retries");
+
+    // gh failure → empty list with the reason.
+    let failing = tmp.path().join("gh-fail");
+    std::fs::write(&failing, "#!/bin/sh\necho 'no remote' >&2\nexit 1\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&failing, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    std::env::set_var("OPENADE_GH_BIN", &failing);
+    let result = Daemon::pull_requests(tmp.path());
+    assert_eq!(result["prs"].as_array().unwrap().len(), 0);
+    assert_eq!(result["note"], "no remote");
+
+    // Missing binary → spawn error note; disabled gh → note.
+    std::env::set_var("OPENADE_GH_BIN", tmp.path().join("nope"));
+    let result = Daemon::pull_requests(tmp.path());
+    assert!(result["note"].as_str().unwrap().contains("No such file"));
+    std::env::set_var("OPENADE_GITHUB_MEMORY", "0");
+    let result = Daemon::pull_requests(tmp.path());
+    assert_eq!(result["note"], "gh CLI not available");
+    std::env::remove_var("OPENADE_GITHUB_MEMORY");
+    std::env::remove_var("OPENADE_GH_BIN");
 }
 
 #[test]

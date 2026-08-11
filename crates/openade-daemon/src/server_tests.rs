@@ -1,4 +1,5 @@
 use super::*;
+use crate::daemon::CheckoutMode;
 use http_body_util::BodyExt;
 use openade_core::Harness;
 use std::process::Command;
@@ -81,6 +82,7 @@ async fn health_and_session_lifecycle_over_http() {
         title: "http test".into(),
         harness: Harness::ClaudeCode,
         repo_root: repo.clone(),
+        checkout: CheckoutMode::default(),
         entity_ref: None,
         prompt: None,
         mcp_servers: vec![],
@@ -161,6 +163,7 @@ async fn create_test_session(app: &Router, repo: &std::path::Path, cmd: &str) ->
         title: "http test".into(),
         harness: Harness::ClaudeCode,
         repo_root: repo.to_path_buf(),
+        checkout: CheckoutMode::default(),
         entity_ref: None,
         prompt: Some("do the thing".into()),
         mcp_servers: vec![],
@@ -232,6 +235,95 @@ async fn input_diff_files_and_projects_over_http() {
         .unwrap();
     let projects = body_json(res).await;
     assert_eq!(projects["projects"][0], repo.to_string_lossy().as_ref());
+
+    // File viewer endpoint serves worktree files and 404s traversal.
+    let res = app
+        .clone()
+        .oneshot(request(
+            "GET",
+            &format!("/sessions/{id}/file?path=README.md"),
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert!(body_json(res).await["content"]
+        .as_str()
+        .unwrap()
+        .contains("edited over http"));
+    let res = app
+        .clone()
+        .oneshot(request(
+            "GET",
+            &format!("/sessions/{id}/file?path=../../../etc/passwd"),
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+
+    // Skills endpoint lists discovered skills.
+    std::fs::create_dir_all(worktree.join(".openade/skills")).unwrap();
+    std::fs::write(
+        worktree.join(".openade/skills/deploy.md"),
+        "# Deploy\nShip it safely.\n",
+    )
+    .unwrap();
+    let res = app
+        .clone()
+        .oneshot(request("GET", &format!("/sessions/{id}/skills"), None))
+        .await
+        .unwrap();
+    let skills = body_json(res).await;
+    assert_eq!(skills["skills"][0]["name"], "deploy");
+    assert_eq!(skills["skills"][0]["description"], "Ship it safely.");
+
+    // Main-checkout sessions refuse worktree cleanup with a 409.
+    let mut main_req = LaunchSessionRequest {
+        title: "main mode".into(),
+        harness: Harness::ClaudeCode,
+        repo_root: repo.to_path_buf(),
+        checkout: CheckoutMode::Main,
+        entity_ref: None,
+        prompt: None,
+        mcp_servers: vec![],
+        command_override: Some(crate::pty::CommandSpec::new("sh").arg("-c").arg("true")),
+    };
+    main_req.checkout = CheckoutMode::Main;
+    let res = app
+        .clone()
+        .oneshot(request(
+            "POST",
+            "/sessions",
+            Some(serde_json::to_value(&main_req).unwrap()),
+        ))
+        .await
+        .unwrap();
+    let main_id = body_json(res).await["id"].as_str().unwrap().to_string();
+    let res = app
+        .clone()
+        .oneshot(request(
+            "DELETE",
+            &format!("/sessions/{main_id}/worktree?force=true"),
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+
+    // PR endpoint degrades cleanly (env untouched here; any answer is a
+    // well-formed {prs: [...]} — the gh behaviors are unit-tested).
+    let res = app
+        .clone()
+        .oneshot(request(
+            "GET",
+            &format!("/projects/prs?repo={}", repo.to_string_lossy()),
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert!(body_json(res).await["prs"].is_array());
 }
 
 // The env mutex must stay held across the HTTP awaits — the runtime is
@@ -449,6 +541,7 @@ async fn sessions_can_be_filtered_by_entity() {
         title: "entity session".into(),
         harness: Harness::ClaudeCode,
         repo_root: repo.clone(),
+        checkout: CheckoutMode::default(),
         entity_ref: Some("component:default/payments-api".into()),
         prompt: None,
         mcp_servers: vec![],
@@ -582,6 +675,7 @@ async fn launch_errors_are_surfaced_as_api_errors() {
         title: "bad".into(),
         harness: Harness::ClaudeCode,
         repo_root: "/definitely/not/a/repo".into(),
+        checkout: CheckoutMode::default(),
         entity_ref: None,
         prompt: None,
         mcp_servers: vec![],

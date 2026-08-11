@@ -1,5 +1,6 @@
 import { FormEvent, useEffect, useState } from "react";
 import {
+  CheckoutMode,
   createSession,
   HARNESSES,
   Harness,
@@ -20,6 +21,7 @@ export function NewSessionForm({
   const [title, setTitle] = useState("");
   const [harness, setHarness] = useState<Harness>("claude-code");
   const [repoRoot, setRepoRoot] = useState(initialRepo ?? "");
+  const [checkout, setCheckout] = useState<CheckoutMode>("worktree");
   const [entityRef, setEntityRef] = useState("");
   const [prompt, setPrompt] = useState("");
   const [projects, setProjects] = useState<string[]>([]);
@@ -44,6 +46,7 @@ export function NewSessionForm({
         title,
         harness,
         repo_root: repoRoot,
+        checkout,
         entity_ref: entityRef === "" ? undefined : entityRef,
         prompt: prompt === "" ? undefined : prompt,
       });
@@ -99,6 +102,18 @@ export function NewSessionForm({
             <option key={p} value={p} />
           ))}
         </datalist>
+      </div>
+      <div className="form-row">
+        <label htmlFor="ns-checkout">Checkout</label>
+        <select
+          id="ns-checkout"
+          value={checkout}
+          onChange={(e) => setCheckout(e.target.value as CheckoutMode)}
+          data-testid="ns-checkout"
+        >
+          <option value="worktree">New worktree (parallel-safe)</option>
+          <option value="main">Main checkout (work in the open tree)</option>
+        </select>
       </div>
       <div className="form-row">
         <label htmlFor="ns-entity">Memory entity (optional)</label>

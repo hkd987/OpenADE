@@ -313,3 +313,65 @@ test("header affordances: palette, projects view, settings", async ({
   await page.getByTestId("ob-cancel").click();
   await expect(page.getByTestId("onboarding")).toHaveCount(0);
 });
+
+test("docs parity: file viewer, rules, skills, main checkout, goal box, PRs", async ({
+  page,
+  request,
+}) => {
+  await page.goto("/");
+  await page.locator(".session-card").first().click();
+
+  // Files tab: click-to-view, read-only, back.
+  await page.getByTestId("tab-files").click();
+  await page.locator(".file-row", { hasText: "README.md" }).click();
+  await expect(page.getByTestId("file-viewer")).toContainText("fixture");
+  await page.getByTestId("file-viewer-back").click();
+
+  // Rules tab lists the materialized instruction files.
+  await page.getByTestId("tab-rules").click();
+  await expect(page.getByTestId("rules-list")).toContainText("CLAUDE.md");
+
+  // Skills tab lists the committed skill with its description.
+  await page.getByTestId("tab-skills").click();
+  const skillsList = page.getByTestId("skills-list");
+  await expect(skillsList).toContainText("release");
+  await expect(skillsList).toContainText("Cut and publish a release.");
+
+  // Grid layout toggle.
+  await page.getByTestId("layout-toggle").click();
+  await expect(page.getByTestId("session-grid")).toHaveClass(/compact/);
+  await page.getByTestId("layout-toggle").click();
+
+  // Main-checkout mode: the session's working dir IS the repository.
+  await page.getByTestId("toggle-new-session").click();
+  await page.getByTestId("ns-title").fill("main checkout task");
+  await page.getByTestId("ns-repo").fill(repo);
+  await page.getByTestId("ns-checkout").selectOption("main");
+  await page.getByTestId("ns-submit").click();
+  await expect(
+    page.locator(".session-card", { hasText: "main checkout task" }),
+  ).toBeVisible();
+  const sessions = await (await request.get(`${daemon}/sessions`)).json();
+  const mainSession = sessions.sessions.find(
+    (s: { title: string }) => s.title === "main checkout task",
+  );
+  expect(mainSession.worktree_path).toBe(repo);
+  // Cleaning up a main-checkout "worktree" is refused (409).
+  const res = await request.delete(
+    `${daemon}/sessions/${mainSession.id}/worktree?force=true`,
+  );
+  expect(res.status()).toBe(409);
+  await request.delete(`${daemon}/sessions/${mainSession.id}`);
+
+  // Projects view: PR monitoring (gh shim) + goal-box launch.
+  await page.getByTestId("view-projects").click();
+  const prs = page.getByTestId("project-prs").first();
+  await expect(prs).toContainText("1 open PR");
+  await expect(prs).toContainText("#7 Add retries");
+  const goal = page.getByTestId("goal-box").first();
+  await goal.fill("tighten the retry budget");
+  await goal.press("Enter");
+  await expect(
+    page.locator(".session-card", { hasText: "tighten the retry budget" }),
+  ).toBeVisible();
+});

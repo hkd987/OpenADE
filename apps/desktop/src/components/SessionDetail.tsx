@@ -8,12 +8,17 @@ import {
   Harness,
   killSession,
   publishArtifact,
+  getFileContent,
+  getSkills,
   SessionMeta,
+  SkillInfo,
   timeAgo,
 } from "../api";
 import { TerminalView } from "./TerminalView";
 
-type Tab = "terminal" | "diff" | "files";
+type Tab = "terminal" | "diff" | "files" | "rules" | "skills";
+
+const RULES_FILES = ["CLAUDE.md", "AGENTS.md", "GEMINI.md", ".openade/rules.md"];
 
 export function SessionDetail({
   session,
@@ -25,6 +30,8 @@ export function SessionDetail({
   const [tab, setTab] = useState<Tab>("terminal");
   const [diff, setDiff] = useState("");
   const [files, setFiles] = useState<string[]>([]);
+  const [skills, setSkills] = useState<SkillInfo[]>([]);
+  const [viewing, setViewing] = useState<{ path: string; content: string } | null>(null);
   const [artifact, setArtifact] = useState<ArtifactInfo | null>(null);
   const [handoffTo, setHandoffTo] = useState<Harness>("gemini-cli");
   const [error, setError] = useState<string | null>(null);
@@ -33,6 +40,7 @@ export function SessionDetail({
   useEffect(() => {
     setArtifact(null);
     setError(null);
+    setViewing(null);
     setTab("terminal");
   }, [session.id]);
 
@@ -42,12 +50,24 @@ export function SessionDetail({
         .then(({ diff }) => setDiff(diff))
         .catch((e) => setError(String(e)));
     }
-    if (tab === "files") {
+    if (tab === "files" || tab === "rules") {
       getFiles(session.id)
         .then(({ files }) => setFiles(files))
         .catch((e) => setError(String(e)));
     }
+    if (tab === "skills") {
+      getSkills(session.id)
+        .then(({ skills }) => setSkills(skills))
+        .catch((e) => setError(String(e)));
+    }
+    setViewing(null);
   }, [tab, session.id]);
+
+  const view = (path: string) => {
+    getFileContent(session.id, path)
+      .then(setViewing)
+      .catch((e) => setError(String(e)));
+  };
 
   const act = async (action: () => Promise<void>) => {
     setBusy(true);
@@ -154,7 +174,7 @@ export function SessionDetail({
       )}
 
       <nav className="tabs" aria-label="Session views">
-        {(["terminal", "diff", "files"] as Tab[]).map((t) => (
+        {(["terminal", "diff", "files", "rules", "skills"] as Tab[]).map((t) => (
           <button
             key={t}
             className={tab === t ? "tab active" : "tab"}
@@ -172,14 +192,71 @@ export function SessionDetail({
           {diff === "" ? "No changes against the task's base commit yet." : diff}
         </pre>
       )}
-      {tab === "files" && (
+      {tab === "files" && viewing === null && (
         <ul className="file-list" data-testid="file-list">
           {files.map((f) => (
             <li key={f}>
-              <code>{f}</code>
+              <button type="button" className="file-row" onClick={() => view(f)}>
+                <code>{f}</code>
+              </button>
             </li>
           ))}
         </ul>
+      )}
+      {tab === "rules" && viewing === null && (
+        <ul className="file-list" data-testid="rules-list">
+          {files.filter((f) => RULES_FILES.includes(f)).map((f) => (
+            <li key={f}>
+              <button type="button" className="file-row" onClick={() => view(f)}>
+                <code>{f}</code>
+              </button>
+            </li>
+          ))}
+          {files.filter((f) => RULES_FILES.includes(f)).length === 0 && (
+            <li className="empty">
+              No rules files — add <code>.openade/rules.md</code> to the
+              repository and they materialize per harness.
+            </li>
+          )}
+        </ul>
+      )}
+      {tab === "skills" && viewing === null && (
+        <ul className="file-list" data-testid="skills-list">
+          {skills.map((s) => (
+            <li key={s.path}>
+              <button
+                type="button"
+                className="file-row"
+                onClick={() => view(s.path)}
+              >
+                <strong>{s.name}</strong>
+                <span className="skill-desc">{s.description}</span>
+              </button>
+            </li>
+          ))}
+          {skills.length === 0 && (
+            <li className="empty">
+              No skills discovered — add <code>.claude/skills/&lt;name&gt;/SKILL.md</code>{" "}
+              or <code>.openade/skills/*.md</code>.
+            </li>
+          )}
+        </ul>
+      )}
+      {tab !== "terminal" && tab !== "diff" && viewing !== null && (
+        <div className="file-viewer" data-testid="file-viewer">
+          <div className="file-viewer-bar">
+            <code>{viewing.path}</code>
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => setViewing(null)}
+              data-testid="file-viewer-back"
+            >
+              Back
+            </button>
+          </div>
+          <pre>{viewing.content}</pre>
+        </div>
       )}
     </div>
   );

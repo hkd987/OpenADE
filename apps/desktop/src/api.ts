@@ -75,12 +75,32 @@ export interface SessionMeta {
   updated_at: string;
 }
 
+/** Where a session's working directory lives (Xirp's checkout mode). */
+export type CheckoutMode = "worktree" | "main";
+
 export interface LaunchSessionRequest {
   title: string;
   harness: Harness;
   repo_root: string;
+  checkout?: CheckoutMode;
   entity_ref?: string;
   prompt?: string;
+}
+
+/** A reusable agent skill discovered in the session's working directory. */
+export interface SkillInfo {
+  name: string;
+  path: string;
+  description: string;
+}
+
+/** An open pull request on a project's GitHub remote. */
+export interface PrInfo {
+  number: number;
+  title: string;
+  url: string;
+  headRefName: string;
+  isDraft: boolean;
 }
 
 export interface ArtifactInfo {
@@ -175,6 +195,23 @@ export function getDiff(id: string): Promise<{ diff: string }> {
 
 export function getFiles(id: string): Promise<{ files: string[] }> {
   return request(`/sessions/${id}/files`);
+}
+
+export function getFileContent(
+  id: string,
+  path: string,
+): Promise<{ path: string; content: string }> {
+  return request(`/sessions/${id}/file?path=${encodeURIComponent(path)}`);
+}
+
+export function getSkills(id: string): Promise<{ skills: SkillInfo[] }> {
+  return request(`/sessions/${id}/skills`);
+}
+
+export function listPrs(
+  repoRoot: string,
+): Promise<{ prs: PrInfo[]; note?: string }> {
+  return request(`/projects/prs?repo=${encodeURIComponent(repoRoot)}`);
 }
 
 export function listProjects(): Promise<{ projects: string[] }> {

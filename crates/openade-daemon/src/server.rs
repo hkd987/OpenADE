@@ -28,6 +28,9 @@ pub fn router(daemon: Arc<Daemon>) -> Router {
         .route("/sessions/{id}/worktree", delete(delete_worktree))
         .route("/sessions/{id}/diff", get(get_diff))
         .route("/sessions/{id}/files", get(get_files))
+        .route("/sessions/{id}/file", get(get_file))
+        .route("/sessions/{id}/skills", get(get_skills))
+        .route("/projects/prs", get(get_project_prs))
         .route("/sessions/{id}/artifact", post(post_artifact))
         .route("/sessions/{id}/handoff", post(post_handoff))
         .route("/projects", get(list_projects))
@@ -51,6 +54,7 @@ impl From<DaemonError> for ApiError {
         let status = match &err {
             DaemonError::NotFound(_) => StatusCode::NOT_FOUND,
             DaemonError::Worktree(crate::worktree::WorktreeError::Dirty(_)) => StatusCode::CONFLICT,
+            DaemonError::MainCheckout => StatusCode::CONFLICT,
             _ => StatusCode::INTERNAL_SERVER_ERROR,
         };
         ApiError(status, err.to_string())
@@ -122,6 +126,44 @@ async fn put_config(
         Ok(status) => Ok(Json(status)),
         Err(e) => Err(ApiError(StatusCode::INTERNAL_SERVER_ERROR, e)),
     }
+}
+
+#[derive(Deserialize)]
+struct FileQuery {
+    path: String,
+}
+
+/// Read one file from the session's working directory (Files tab viewer).
+async fn get_file(
+    State(daemon): State<Arc<Daemon>>,
+    Path(id): Path<Uuid>,
+    Query(q): Query<FileQuery>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let content = daemon.read_workdir_file(id, &q.path)?;
+    Ok(Json(
+        serde_json::json!({ "path": q.path, "content": content }),
+    ))
+}
+
+/// Reusable agent skills discovered in the session's working directory.
+async fn get_skills(
+    State(daemon): State<Arc<Daemon>>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    Ok(Json(serde_json::json!({ "skills": daemon.skills(id)? })))
+}
+
+#[derive(Deserialize)]
+struct PrQuery {
+    repo: std::path::PathBuf,
+}
+
+/// Open pull requests for a project, via the user's local gh CLI.
+async fn get_project_prs(Query(q): Query<PrQuery>) -> Json<serde_json::Value> {
+    // gh is a subprocess; keep the async runtime clean. Panic = bug.
+    tokio::task::spawn_blocking(move || Json(Daemon::pull_requests(&q.repo)))
+        .await
+        .expect("pr list task panicked")
 }
 
 #[derive(Deserialize)]

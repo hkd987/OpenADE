@@ -21,6 +21,19 @@ use crate::pty::{CommandSpec, PtyError, PtyHost};
 use crate::transcript::{EventKind, TranscriptError, TranscriptStore};
 use crate::worktree::{WorktreeError, WorktreeManager};
 
+/// Where a session's working directory lives (Xirp's "checkout mode").
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CheckoutMode {
+    /// A fresh Git worktree on its own branch (parallel-safe default).
+    #[default]
+    Worktree,
+    /// Run directly in the repository's main checkout — for quick work in
+    /// the tree you already have open. No isolation: one such session per
+    /// repo is wise, and its checkout is never cleaned up.
+    Main,
+}
+
 /// Request to launch a new session.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct LaunchSessionRequest {
@@ -28,6 +41,9 @@ pub struct LaunchSessionRequest {
     pub harness: Harness,
     /// The repository to create a task worktree in.
     pub repo_root: PathBuf,
+    /// Checkout mode: isolated worktree (default) or the main checkout.
+    #[serde(default)]
+    pub checkout: CheckoutMode,
     /// Catalog entity the session is launched from, if any.
     #[serde(default)]
     pub entity_ref: Option<String>,
@@ -72,6 +88,8 @@ pub enum DaemonError {
     Handoff(Uuid, String),
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
+    #[error("session runs in the repository's main checkout; there is no worktree to remove")]
+    MainCheckout,
 }
 
 /// Memory wiring, replaceable at runtime (onboarding saves settings and
@@ -399,16 +417,29 @@ impl Daemon {
         let mut meta = SessionMeta::new(&req.title, req.harness, &req.repo_root);
         meta.entity_ref = req.entity_ref.clone();
 
-        // R2: one worktree per task.
+        // R2: one worktree per task — unless the user explicitly asked to
+        // run in the main checkout (Xirp's second checkout mode).
         let mgr = self.worktree_manager(&req.repo_root);
-        let wt = mgr.create(&req.title)?;
-        meta.worktree_path = Some(wt.path.clone());
-        meta.branch = Some(wt.branch.clone());
-        meta.base_commit = Some(wt.base_commit.clone());
+        let workdir = match req.checkout {
+            CheckoutMode::Worktree => {
+                let wt = mgr.create(&req.title)?;
+                meta.branch = Some(wt.branch.clone());
+                meta.base_commit = Some(wt.base_commit.clone());
+                wt.path
+            }
+            CheckoutMode::Main => {
+                let (branch, head) = mgr.current_branch_and_head()?;
+                meta.branch = Some(branch);
+                meta.base_commit = Some(head);
+                req.repo_root.clone()
+            }
+        };
+        meta.worktree_path = Some(workdir.clone());
+        let wt_path = workdir;
 
         // R4: same rules for every harness. A project without a canonical
         // rules source is fine — the harness just runs with its own defaults.
-        match rules::materialize_rules(&wt.path, &[req.harness], false) {
+        match rules::materialize_rules(&wt_path, &[req.harness], false) {
             Ok(_) | Err(rules::RulesError::MissingCanonical(_)) => {}
             Err(e) => tracing::warn!("rules materialization failed: {e}"),
         }
@@ -417,7 +448,7 @@ impl Daemon {
         // appended to its rules file — plus machine-readable copies under
         // .openade/ for tools and handoff.
         if let Some(bundle) = &bundle {
-            let dot_openade = wt.path.join(".openade");
+            let dot_openade = wt_path.join(".openade");
             fs::create_dir_all(&dot_openade)?;
             fs::write(
                 dot_openade.join("context.json"),
@@ -426,7 +457,7 @@ impl Daemon {
             let markdown = bundle.to_markdown();
             fs::write(dot_openade.join("context.md"), &markdown)?;
 
-            let rules_file = wt.path.join(req.harness.rules_filename());
+            let rules_file = wt_path.join(req.harness.rules_filename());
             let mut content = fs::read_to_string(&rules_file).unwrap_or_default();
             if !content.is_empty() && !content.ends_with('\n') {
                 content.push('\n');
@@ -456,12 +487,12 @@ impl Daemon {
         // into the worktree; user-scoped ones (e.g. Codex's config.toml) are
         // surfaced to the caller instead of silently editing user config.
         let adapter = adapter_for(req.harness);
-        for reg in adapter.mcp_registrations(&wt.path, &mcp_servers) {
+        for reg in adapter.mcp_registrations(&wt_path, &mcp_servers) {
             match reg.scope {
                 crate::adapters::RegistrationScope::Project => {
                     // reg.file is worktree-relative, so joining onto the
                     // worktree root always yields a parent.
-                    let target = wt.path.join(&reg.file);
+                    let target = wt_path.join(&reg.file);
                     let parent = target.parent().expect("registration path has a parent");
                     fs::create_dir_all(parent)?;
                     if !target.exists() {
@@ -486,7 +517,7 @@ impl Daemon {
                 mcp_servers: mcp_servers.clone(),
             })
         });
-        self.pty.spawn(meta.id, &spec, Some(wt.path.clone()))?;
+        self.pty.spawn(meta.id, &spec, Some(wt_path.clone()))?;
         meta.set_state(SessionState::Running);
 
         // R6 groundwork: everything is on the record from the first moment.
@@ -629,12 +660,17 @@ impl Daemon {
         Ok(meta.clone())
     }
 
-    /// Remove a finished session's worktree (dirty-state guarded).
+    /// Remove a finished session's worktree (dirty-state guarded). A
+    /// main-checkout session has nothing to clean up — and its directory
+    /// is the user's repository, which must never be removed.
     pub fn cleanup_worktree(&self, id: Uuid, force: bool) -> Result<(), DaemonError> {
         let meta = self.get(id)?;
         let Some(wt) = meta.worktree_path else {
             return Ok(());
         };
+        if wt == meta.repo_root {
+            return Err(DaemonError::MainCheckout);
+        }
         let mgr = self.worktree_manager(&meta.repo_root);
         mgr.remove(&wt, force)?;
         Ok(())
@@ -660,6 +696,109 @@ impl Daemon {
         };
         let mgr = self.worktree_manager(&meta.repo_root);
         Ok(mgr.files(wt)?)
+    }
+
+    /// Read one file from the session's working directory (the Files tab
+    /// viewer). The path is worktree-relative; escapes are rejected.
+    pub fn read_workdir_file(&self, id: Uuid, rel: &str) -> Result<String, DaemonError> {
+        let meta = self.get(id)?;
+        let wt = meta.worktree_path.ok_or(DaemonError::NotFound(id))?;
+        let target = wt.join(rel.trim_start_matches('/'));
+        let canonical = target
+            .canonicalize()
+            .map_err(|_| DaemonError::NotFound(id))?;
+        let root = wt.canonicalize().map_err(|_| DaemonError::NotFound(id))?;
+        if !canonical.starts_with(&root) || !canonical.is_file() {
+            return Err(DaemonError::NotFound(id));
+        }
+        Ok(fs::read_to_string(canonical)?)
+    }
+
+    /// Reusable agent skills discovered in the session's working directory
+    /// (Xirp's Skills tab): `.claude/skills/<name>/SKILL.md` and
+    /// `.openade/skills/*.md`. The description is the first non-heading,
+    /// non-frontmatter line of the file.
+    pub fn skills(&self, id: Uuid) -> Result<Vec<serde_json::Value>, DaemonError> {
+        let meta = self.get(id)?;
+        let wt = meta.worktree_path.ok_or(DaemonError::NotFound(id))?;
+        let mut out = Vec::new();
+        let mut push = |name: String, rel: PathBuf| {
+            let description = fs::read_to_string(wt.join(&rel))
+                .ok()
+                .and_then(|content| {
+                    // Skip a leading YAML frontmatter block, then take the
+                    // first non-empty, non-heading line.
+                    let body = match content.strip_prefix("---") {
+                        Some(rest) => rest
+                            .split_once("\n---")
+                            .map(|(_, after)| after.to_string())
+                            .unwrap_or(content.clone()),
+                        None => content.clone(),
+                    };
+                    body.lines()
+                        .map(str::trim)
+                        .find(|l| !l.is_empty() && !l.starts_with('#'))
+                        .map(str::to_string)
+                })
+                .unwrap_or_default();
+            out.push(serde_json::json!({
+                "name": name,
+                "path": rel,
+                "description": description,
+            }));
+        };
+        if let Ok(entries) = fs::read_dir(wt.join(".claude/skills")) {
+            for entry in entries.flatten() {
+                let name = entry.file_name().to_string_lossy().into_owned();
+                let rel = PathBuf::from(".claude/skills").join(&name).join("SKILL.md");
+                if wt.join(&rel).is_file() {
+                    push(name, rel);
+                }
+            }
+        }
+        if let Ok(entries) = fs::read_dir(wt.join(".openade/skills")) {
+            for entry in entries.flatten() {
+                let file = entry.file_name().to_string_lossy().into_owned();
+                if let Some(name) = file.strip_suffix(".md") {
+                    push(
+                        name.to_string(),
+                        PathBuf::from(".openade/skills").join(&file),
+                    );
+                }
+            }
+        }
+        out.sort_by(|a, b| a["name"].as_str().cmp(&b["name"].as_str()));
+        Ok(out)
+    }
+
+    /// Open pull requests for a repository, through the user's local gh CLI
+    /// (Xirp's PR monitoring). Degrades to an empty list with a reason when
+    /// gh is unavailable or the repo has no GitHub remote.
+    pub fn pull_requests(repo_root: &std::path::Path) -> serde_json::Value {
+        let Some(gh) = catalog_mcp::github::resolve_gh_bin() else {
+            return serde_json::json!({ "prs": [], "note": "gh CLI not available" });
+        };
+        let output = std::process::Command::new(gh)
+            .current_dir(repo_root)
+            .args([
+                "pr",
+                "list",
+                "--json",
+                "number,title,url,headRefName,isDraft",
+            ])
+            .output();
+        match output {
+            Ok(out) if out.status.success() => {
+                let prs: serde_json::Value =
+                    serde_json::from_slice(&out.stdout).unwrap_or_else(|_| serde_json::json!([]));
+                serde_json::json!({ "prs": prs })
+            }
+            Ok(out) => serde_json::json!({
+                "prs": [],
+                "note": String::from_utf8_lossy(&out.stderr).trim(),
+            }),
+            Err(e) => serde_json::json!({ "prs": [], "note": e.to_string() }),
+        }
     }
 
     /// Repositories sessions have been launched in (R3 project list).

@@ -189,4 +189,16 @@ describe("api client", () => {
       onboarded: true,
     });
   });
+
+  it("fetches file content, skills, and project PRs", async () => {
+    const fetch = mockFetch(200, { path: "a.md", content: "x", skills: [], prs: [] });
+    const { getFileContent, getSkills, listPrs } = await import("./api");
+    await getFileContent("abc", "src/a b.md");
+    await getSkills("abc");
+    await listPrs("/repos/checkout");
+    const urls = fetch.mock.calls.map((c) => c[0] as string);
+    expect(urls[0]).toContain("/sessions/abc/file?path=src%2Fa%20b.md");
+    expect(urls[1]).toContain("/sessions/abc/skills");
+    expect(urls[2]).toContain("/projects/prs?repo=%2Frepos%2Fcheckout");
+  });
 });

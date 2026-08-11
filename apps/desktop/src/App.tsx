@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import {
+  createSession,
   DaemonConfig,
   getConfig,
   listSessions,
@@ -24,6 +25,7 @@ export default function App() {
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [config, setConfig] = useState<DaemonConfig | null>(null);
   const [view, setView] = useState<"sessions" | "projects">("sessions");
+  const [layout, setLayout] = useState<"cards" | "compact">("cards");
   const [showPalette, setShowPalette] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
 
@@ -70,6 +72,24 @@ export default function App() {
     setFormRepo(repo);
     setShowForm(true);
     setView("sessions");
+  };
+
+  // Goal box (Xirp's "describe the outcome" launcher): one line of intent
+  // becomes a session immediately — default harness, auto-grounded memory.
+  const launchGoal = async (repoRoot: string, goal: string) => {
+    try {
+      const session = await createSession({
+        title: goal.length > 60 ? `${goal.slice(0, 57)}…` : goal,
+        harness: "claude-code",
+        repo_root: repoRoot,
+        prompt: goal,
+      });
+      setSelected(session.id);
+      setView("sessions");
+      void refresh();
+    } catch (err) {
+      setDaemonError(err instanceof Error ? err.message : String(err));
+    }
   };
 
   const selectedSession = sessions.find((s) => s.id === selected) ?? null;
@@ -190,14 +210,28 @@ export default function App() {
           projects={projects}
           onNewSession={(repo) => openForm(repo)}
           onOpenProject={() => setView("sessions")}
+          onGoal={(repo, goal) => void launchGoal(repo, goal)}
         />
       ) : (
         <main className="layout">
           <section
-            className="session-grid"
+            className={`session-grid ${layout}`}
             aria-label="Sessions"
             data-testid="session-grid"
           >
+            {sessions.length > 0 && (
+              <button
+                type="button"
+                className="layout-toggle"
+                title="Switch between card and compact layouts"
+                data-testid="layout-toggle"
+                onClick={() =>
+                  setLayout((l) => (l === "cards" ? "compact" : "cards"))
+                }
+              >
+                {layout === "cards" ? "☰ Compact" : "▦ Cards"}
+              </button>
+            )}
             {sessions.length === 0 && daemonError === null && (
               <p className="empty" data-testid="empty-grid">
                 No sessions yet — press “New session” to launch one.

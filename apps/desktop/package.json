@@ -1,7 +1,7 @@
 {
   "name": "@openade/desktop",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "OpenADE desktop app: session grid + terminals over the openade-daemon API (Tauri shell)",
   "type": "module",
   "scripts": {

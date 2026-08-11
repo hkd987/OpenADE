@@ -40,6 +40,11 @@ export default function prepareWorld() {
     path.join(repo, ".openade/rules.md"),
     "Always run the tests.\n",
   );
+  fs.mkdirSync(path.join(repo, ".openade/skills"), { recursive: true });
+  fs.writeFileSync(
+    path.join(repo, ".openade/skills/release.md"),
+    "# Release\nCut and publish a release.\n",
+  );
   git(repo, "add", ".");
   git(repo, "commit", "-m", "init");
   // A GitHub origin remote: sessions launched without an entity auto-ground
@@ -86,6 +91,9 @@ STATE="${teamMemory}"
 case "$*" in
   "auth status"*)
     exit 0
+    ;;
+  "pr list"*)
+    printf '[{"number":7,"title":"Add retries","url":"https://github.com/acme/checkout-service/pull/7","headRefName":"retries","isDraft":false}]'
     ;;
   "api -X PUT repos/acme/team-memory/contents/"*)
     file="\${4#repos/acme/team-memory/contents/}"
