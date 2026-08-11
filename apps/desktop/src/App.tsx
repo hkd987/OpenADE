@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { listSessions, SessionMeta } from "./api";
+import { NewSessionForm } from "./components/NewSessionForm";
 import { SessionCard } from "./components/SessionCard";
-import { TerminalView } from "./components/TerminalView";
+import { SessionDetail } from "./components/SessionDetail";
 
 const POLL_MS = 2000;
 
@@ -9,6 +10,7 @@ export default function App() {
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [daemonError, setDaemonError] = useState<string | null>(null);
+  const [showForm, setShowForm] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -33,20 +35,37 @@ export default function App() {
       <header className="app-header">
         <h1>OpenADE</h1>
         <span className="tagline">open agentic development environment</span>
+        <button
+          className="new-session-button"
+          onClick={() => setShowForm((v) => !v)}
+          data-testid="toggle-new-session"
+        >
+          {showForm ? "Close" : "New session"}
+        </button>
       </header>
 
       {daemonError !== null && (
-        <div className="daemon-error">
+        <div className="daemon-error" data-testid="daemon-error">
           Cannot reach openade-daemon — is it running? <code>{daemonError}</code>
         </div>
       )}
 
+      {showForm && (
+        <NewSessionForm
+          onCreated={(session) => {
+            setShowForm(false);
+            setSelected(session.id);
+            void refresh();
+          }}
+          onClose={() => setShowForm(false)}
+        />
+      )}
+
       <main className="layout">
-        <section className="session-grid" aria-label="Sessions">
+        <section className="session-grid" aria-label="Sessions" data-testid="session-grid">
           {sessions.length === 0 && daemonError === null && (
-            <p className="empty">
-              No sessions yet. Launch one via the daemon API, e.g.{" "}
-              <code>POST /sessions</code>.
+            <p className="empty" data-testid="empty-grid">
+              No sessions yet — press “New session” to launch one.
             </p>
           )}
           {sessions.map((session) => (
@@ -59,11 +78,19 @@ export default function App() {
           ))}
         </section>
 
-        <section className="terminal-pane" aria-label="Terminal">
+        <section className="terminal-pane" aria-label="Session detail">
           {selectedSession ? (
-            <TerminalView key={selectedSession.id} session={selectedSession} />
+            <SessionDetail
+              session={selectedSession}
+              onChanged={(selectId) => {
+                if (selectId !== undefined) {
+                  setSelected(selectId);
+                }
+                void refresh();
+              }}
+            />
           ) : (
-            <p className="empty">Select a session to attach its terminal.</p>
+            <p className="empty">Select a session to attach.</p>
           )}
         </section>
       </main>

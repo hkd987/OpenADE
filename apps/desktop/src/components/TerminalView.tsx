@@ -64,11 +64,7 @@ export function TerminalView({ session }: { session: SessionMeta }) {
   }, [session.id]);
 
   return (
-    <div className="terminal-view">
-      <div className="terminal-header">
-        <strong>{session.title}</strong>
-        <span className="worktree">{session.worktree_path}</span>
-      </div>
+    <div className="terminal-view" data-testid="terminal-view">
       <div className="terminal-container" ref={containerRef} />
     </div>
   );
