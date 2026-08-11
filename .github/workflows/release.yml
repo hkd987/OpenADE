@@ -1,18 +1,18 @@
 name: Release
 
-# Tag a version (e.g. `git tag v0.1.0 && git push --tags`) to build and
-# publish openade-daemon + catalog-mcp binaries for macOS and Linux on a
-# GitHub Release. See README "Install" for the download links.
+# One-button releases: press "Run workflow" on main (Actions → Release)
+# and everything happens — the version is read from Cargo.toml, the full
+# verification gate runs, binaries build for macOS and Linux, and a GitHub
+# Release is published with the v<version> tag created server-side.
+# Pushing a v* tag still works as a manual path. See README "Install".
 
 on:
-  # Tag pushes are the normal path; workflow_dispatch covers environments
-  # whose git remotes cannot push tag refs (the release action then creates
-  # the tag on GitHub itself).
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag (e.g. v0.2.0)"
-        required: true
+        description: "Release tag (blank = v<version> from Cargo.toml)"
+        required: false
+        default: ""
   push:
     tags:
       - "v*"
@@ -21,8 +21,45 @@ permissions:
   contents: write
 
 jobs:
+  resolve:
+    name: Resolve release tag
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.pick.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Pick the tag and refuse re-releases
+        id: pick
+        run: |
+          if [ -n "${{ github.event.inputs.tag }}" ]; then
+            tag="${{ github.event.inputs.tag }}"
+          elif [ "${{ github.event_name }}" = "push" ]; then
+            tag="${GITHUB_REF_NAME}"
+          else
+            version=$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)
+            tag="v${version}"
+          fi
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          if [ "${{ github.event_name }}" != "push" ] \
+             && git ls-remote --tags origin "refs/tags/${tag}" | grep -q .; then
+            echo "::error::${tag} already exists — bump version in Cargo.toml first"
+            exit 1
+          fi
+
+  verify:
+    name: Verify before release
+    needs: resolve
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
+
   build:
     name: Build ${{ matrix.target }}
+    needs: [resolve, verify]
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -50,7 +87,7 @@ jobs:
 
       - name: Package
         run: |
-          tag="${{ github.event.inputs.tag || github.ref_name }}"
+          tag="${{ needs.resolve.outputs.tag }}"
           version="${tag#v}"
           pkg="openade-${version}-${{ matrix.target }}"
           mkdir -p "dist/${pkg}"
@@ -69,7 +106,7 @@ jobs:
 
   publish:
     name: Publish GitHub Release
-    needs: build
+    needs: [resolve, build]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -79,10 +116,10 @@ jobs:
       - name: Create release with binaries
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          tag_name: ${{ needs.resolve.outputs.tag }}
           files: |
             dist/*.tar.gz
             dist/*.sha256
           generate_release_notes: true
           draft: false
-          prerelease: ${{ contains(github.event.inputs.tag || github.ref_name, '-') }}
+          prerelease: ${{ contains(needs.resolve.outputs.tag, '-') }}
