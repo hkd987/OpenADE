@@ -6,6 +6,7 @@
 //! groundwork), and a localhost HTTP API the desktop app attaches to.
 
 pub mod adapters;
+pub mod artifact;
 pub mod daemon;
 pub mod pty;
 pub mod server;

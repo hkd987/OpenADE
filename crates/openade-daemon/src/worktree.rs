@@ -165,6 +165,63 @@ impl WorktreeManager {
             .map(|_| ())
     }
 
+    /// Commit a single file onto a new branch (from the repo's current HEAD)
+    /// without touching the primary checkout or any task worktree — used for
+    /// knowledge artifacts (PRD R6: artifacts land on a review branch).
+    ///
+    /// Uses a throwaway detached worktree so the user's checkout, index, and
+    /// running sessions are never disturbed.
+    pub fn commit_file_on_branch(
+        &self,
+        branch: &str,
+        rel_path: &Path,
+        content: &str,
+        message: &str,
+    ) -> Result<(), WorktreeError> {
+        self.ensure_repo()?;
+        std::fs::create_dir_all(&self.worktrees_root)?;
+        let tmp = self
+            .worktrees_root
+            .join(format!(".publish-{}", Uuid::new_v4().simple()));
+        let tmp_str = tmp.to_string_lossy().into_owned();
+
+        self.git(
+            &self.repo_root,
+            &["worktree", "add", "--detach", &tmp_str, "HEAD"],
+        )?;
+        let result = (|| {
+            self.git(&tmp, &["checkout", "-b", branch])?;
+            let target = tmp.join(rel_path);
+            if let Some(parent) = target.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::write(&target, content)?;
+            let rel = rel_path.to_string_lossy().into_owned();
+            self.git(&tmp, &["add", &rel])?;
+            // Explicit identity: artifact commits must work on machines
+            // without global git config.
+            self.git(
+                &tmp,
+                &[
+                    "-c",
+                    "user.name=OpenADE",
+                    "-c",
+                    "user.email=openade@localhost",
+                    "commit",
+                    "-m",
+                    message,
+                ],
+            )?;
+            Ok(())
+        })();
+        // Always clean up the throwaway worktree; the branch keeps the commit.
+        let _ = self.git(
+            &self.repo_root,
+            &["worktree", "remove", "--force", &tmp_str],
+        );
+        result
+    }
+
     /// The task's full diff: everything in the worktree (committed on the
     /// task branch + staged + unstaged) relative to `base_commit`.
     pub fn diff(&self, worktree_path: &Path, base_commit: &str) -> Result<String, WorktreeError> {

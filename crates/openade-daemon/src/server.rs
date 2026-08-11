@@ -28,6 +28,7 @@ pub fn router(daemon: Arc<Daemon>) -> Router {
         .route("/sessions/{id}/worktree", delete(delete_worktree))
         .route("/sessions/{id}/diff", get(get_diff))
         .route("/sessions/{id}/files", get(get_files))
+        .route("/sessions/{id}/artifact", post(post_artifact))
         .route("/projects", get(list_projects))
         .with_state(daemon)
 }
@@ -113,6 +114,16 @@ async fn get_files(
 
 async fn list_projects(State(daemon): State<Arc<Daemon>>) -> Result<impl IntoResponse, ApiError> {
     Ok(Json(serde_json::json!({ "projects": daemon.projects()? })))
+}
+
+async fn post_artifact(
+    State(daemon): State<Arc<Daemon>>,
+    Path(id): Path<Uuid>,
+) -> Result<impl IntoResponse, ApiError> {
+    let info = tokio::task::spawn_blocking(move || daemon.publish_artifact(id))
+        .await
+        .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))??;
+    Ok((StatusCode::CREATED, Json(info)))
 }
 
 #[derive(Deserialize)]

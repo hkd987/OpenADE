@@ -15,6 +15,7 @@ use openade_core::Harness;
 use uuid::Uuid;
 
 use crate::adapters::{adapter_for, LaunchRequest, McpServerSpec};
+use crate::artifact::ArtifactInfo;
 use crate::pty::{CommandSpec, PtyError, PtyHost};
 use crate::transcript::{EventKind, TranscriptError, TranscriptStore};
 use crate::worktree::{WorktreeError, WorktreeManager};
@@ -396,6 +397,51 @@ impl Daemon {
     pub fn projects(&self) -> Result<Vec<PathBuf>, DaemonError> {
         Ok(self.store.projects()?)
     }
+
+    /// Produce the session's knowledge artifact (R6): summarize the
+    /// transcript + diff into markdown and commit it to the repository on an
+    /// `openade/knowledge-*` review branch. The summary is also recorded as
+    /// the session outcome, feeding future context bundles on the entity.
+    pub fn publish_artifact(&self, id: Uuid) -> Result<ArtifactInfo, DaemonError> {
+        use crate::artifact::{artifact_slug, Summarizer, TemplateSummarizer};
+
+        let meta = self.get(id)?;
+        let events = self.store.read_transcript(id)?;
+        let diff = self.diff(id)?;
+
+        let summarizer = TemplateSummarizer;
+        let summary = summarizer.summary_line(&meta, &events, &diff);
+        let markdown = summarizer.summarize(&meta, &events, &diff);
+
+        let slug = artifact_slug(&meta);
+        let branch = format!("{}{slug}", crate::artifact::KNOWLEDGE_BRANCH_PREFIX);
+        let file = PathBuf::from(crate::artifact::ARTIFACT_DIR).join(format!("{slug}.md"));
+
+        let mgr = self.worktree_manager(&meta.repo_root);
+        mgr.commit_file_on_branch(
+            &branch,
+            &file,
+            &markdown,
+            &format!("docs: session knowledge — {}", meta.title),
+        )?;
+
+        self.store.record(
+            id,
+            EventKind::Outcome,
+            serde_json::json!({
+                "summary": summary,
+                "artifact_branch": branch,
+                "artifact_file": file,
+            }),
+        )?;
+
+        Ok(ArtifactInfo {
+            branch,
+            file,
+            summary,
+            markdown,
+        })
+    }
 }
 
 #[cfg(test)]
@@ -567,6 +613,64 @@ mod tests {
         let wt = meta.worktree_path.unwrap();
         let claude_md = std::fs::read_to_string(wt.join("CLAUDE.md")).unwrap();
         assert!(claude_md.contains("always be testing"));
+    }
+
+    #[test]
+    fn publish_artifact_commits_to_a_review_branch_without_touching_checkout() {
+        let (_tmp, daemon, repo) = setup();
+        let meta = daemon.launch(launch_req(&repo, "true"), None).unwrap();
+        wait_state(&daemon, meta.id, SessionState::Completed);
+
+        // Session did some work in its worktree.
+        let wt = meta.worktree_path.clone().unwrap();
+        std::fs::write(wt.join("README.md"), "hi\nnew feature\n").unwrap();
+
+        let head_before = Command::new("git")
+            .args(["-C", repo.to_str().unwrap(), "rev-parse", "HEAD"])
+            .output()
+            .unwrap()
+            .stdout;
+
+        let info = daemon.publish_artifact(meta.id).unwrap();
+        assert!(info.branch.starts_with("openade/knowledge-"));
+        assert!(info.summary.contains("README.md"), "{}", info.summary);
+        assert!(info.markdown.contains("# Session: test task"));
+
+        // The artifact is committed on the review branch...
+        let show = Command::new("git")
+            .args([
+                "-C",
+                repo.to_str().unwrap(),
+                "show",
+                &format!("{}:{}", info.branch, info.file.display()),
+            ])
+            .output()
+            .unwrap();
+        assert!(show.status.success());
+        let committed = String::from_utf8_lossy(&show.stdout);
+        assert!(committed.contains("README.md"));
+
+        // ...while the user's checkout is untouched (HEAD and status).
+        let head_after = Command::new("git")
+            .args(["-C", repo.to_str().unwrap(), "rev-parse", "HEAD"])
+            .output()
+            .unwrap()
+            .stdout;
+        assert_eq!(head_before, head_after);
+        let status = Command::new("git")
+            .args(["-C", repo.to_str().unwrap(), "status", "--porcelain"])
+            .output()
+            .unwrap();
+        assert!(status.stdout.is_empty());
+
+        // The outcome is on the record for future context bundles.
+        let events = daemon.store().read_transcript(meta.id).unwrap();
+        let outcome = events
+            .iter()
+            .rev()
+            .find(|e| e.kind == EventKind::Outcome)
+            .unwrap();
+        assert_eq!(outcome.payload["artifact_branch"], info.branch);
     }
 
     fn daemon_with_catalog(tmp: &TempDir) -> Daemon {
