@@ -60,8 +60,28 @@ async fn health() -> Json<serde_json::Value> {
     Json(serde_json::json!({ "status": "ok", "version": env!("CARGO_PKG_VERSION") }))
 }
 
-async fn list_sessions(State(daemon): State<Arc<Daemon>>) -> Json<serde_json::Value> {
-    Json(serde_json::json!({ "sessions": daemon.list() }))
+#[derive(Deserialize)]
+struct ListQuery {
+    /// Filter to sessions launched from this catalog entity (includes
+    /// historical sessions from the index, newest first). This is the data
+    /// source for per-entity session views (e.g. a Backstage plugin).
+    entity: Option<String>,
+}
+
+async fn list_sessions(
+    State(daemon): State<Arc<Daemon>>,
+    Query(q): Query<ListQuery>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    match q.entity {
+        Some(entity_ref) => {
+            let records = daemon
+                .store()
+                .sessions_for_entity(&entity_ref)
+                .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+            Ok(Json(serde_json::json!({ "sessions": records })))
+        }
+        None => Ok(Json(serde_json::json!({ "sessions": daemon.list() }))),
+    }
 }
 
 async fn create_session(
@@ -420,6 +440,68 @@ mod tests {
             .unwrap();
         let projects = body_json(res).await;
         assert_eq!(projects["projects"][0], repo.to_string_lossy().as_ref());
+    }
+
+    #[tokio::test]
+    async fn sessions_can_be_filtered_by_entity() {
+        let (_tmp, app, repo) = test_world();
+        // One session with an entity, one without.
+        let mut with_entity = LaunchSessionRequest {
+            title: "entity session".into(),
+            harness: Harness::ClaudeCode,
+            repo_root: repo.clone(),
+            entity_ref: Some("component:default/payments-api".into()),
+            prompt: None,
+            mcp_servers: vec![],
+            command_override: Some(crate::pty::CommandSpec::new("sh").arg("-c").arg("true")),
+        };
+        let res = app
+            .clone()
+            .oneshot(request(
+                "POST",
+                "/sessions",
+                Some(serde_json::to_value(&with_entity).unwrap()),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::CREATED);
+        with_entity.entity_ref = None;
+        with_entity.title = "plain session".into();
+        let res = app
+            .clone()
+            .oneshot(request(
+                "POST",
+                "/sessions",
+                Some(serde_json::to_value(&with_entity).unwrap()),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::CREATED);
+
+        let res = app
+            .clone()
+            .oneshot(request(
+                "GET",
+                "/sessions?entity=component:default/payments-api",
+                None,
+            ))
+            .await
+            .unwrap();
+        let body = body_json(res).await;
+        let sessions = body["sessions"].as_array().unwrap();
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0]["title"], "entity session");
+
+        // Unfiltered list still returns both.
+        let res = app
+            .clone()
+            .oneshot(request("GET", "/sessions", None))
+            .await
+            .unwrap();
+        assert_eq!(
+            body_json(res).await["sessions"].as_array().unwrap().len(),
+            2
+        );
     }
 
     #[tokio::test]
