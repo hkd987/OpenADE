@@ -238,6 +238,134 @@ async fn input_diff_files_and_projects_over_http() {
 // single-threaded and the env mutations span the whole test.
 #[allow(clippy::await_holding_lock)]
 #[tokio::test]
+async fn config_endpoint_onboards_and_applies_settings_live() {
+    let _guard = catalog_mcp::testutil::ENV_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    for var in [
+        "BACKSTAGE_BASE_URL",
+        "BACKSTAGE_TOKEN",
+        "OPENADE_MEMORY_REPO",
+        "OPENADE_GITHUB_MEMORY",
+    ] {
+        std::env::remove_var(var);
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    // An authenticated gh: `auth status` succeeds.
+    let shim = tmp.path().join("gh");
+    std::fs::write(&shim, "#!/bin/sh\nexit 0\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    // ETXTBSY hardening (see memory_repo_tests): probe until runnable.
+    for _ in 0..100 {
+        match Command::new(&shim).arg("--probe").output() {
+            Err(e) if e.raw_os_error() == Some(26) => {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            _ => break,
+        }
+    }
+    std::env::set_var("OPENADE_GH_BIN", &shim);
+
+    let data = tmp.path().join("data");
+    let daemon = Daemon::open(&data).unwrap();
+    daemon.configure(&crate::config::Settings::load(&data));
+    let app = router(Arc::new(daemon));
+
+    // First run: not onboarded; gh detected + authenticated; the github
+    // source is already active (zero config).
+    let res = app
+        .clone()
+        .oneshot(request("GET", "/config", None))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let config = body_json(res).await;
+    assert_eq!(config["onboarded"], false);
+    assert_eq!(config["gh_found"], true);
+    assert_eq!(config["gh_authenticated"], true);
+    assert_eq!(config["memory_sources"], serde_json::json!(["github"]));
+    assert!(config["memory_repo"].is_null());
+    assert!(config["backstage_base_url"].is_null());
+
+    // A malformed shared memory repo is rejected up front.
+    let res = app
+        .clone()
+        .oneshot(request(
+            "PUT",
+            "/config",
+            Some(serde_json::json!({ "memory_repo": "not-owner-name" })),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+
+    // Onboarding saves settings; they apply live and persist to disk.
+    let res = app
+        .clone()
+        .oneshot(request(
+            "PUT",
+            "/config",
+            Some(serde_json::json!({
+                "backstage_base_url": "http://127.0.0.1:1/api",
+                "backstage_token": "token",
+                "memory_repo": "acme/team-memory",
+                "onboarded": true,
+            })),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let config = body_json(res).await;
+    assert_eq!(config["onboarded"], true);
+    assert_eq!(config["backstage_base_url"], "http://127.0.0.1:1/api");
+    assert_eq!(config["backstage_token_set"], true);
+    assert_eq!(config["memory_repo"], "acme/team-memory");
+    assert_eq!(
+        config["memory_sources"],
+        serde_json::json!(["github", "backstage"])
+    );
+    let stored = crate::config::Settings::load(&data);
+    assert!(stored.onboarded);
+    assert_eq!(stored.memory_repo.as_deref(), Some("acme/team-memory"));
+
+    // With gh disabled entirely, status says so (found=false, auth
+    // unknown) so the UI can show install instructions.
+    std::env::remove_var("OPENADE_GH_BIN");
+    std::env::set_var("OPENADE_GITHUB_MEMORY", "0");
+    let res = app
+        .clone()
+        .oneshot(request("GET", "/config", None))
+        .await
+        .unwrap();
+    let config = body_json(res).await;
+    assert_eq!(config["gh_found"], false);
+    assert!(config["gh_authenticated"].is_null());
+    std::env::remove_var("OPENADE_GITHUB_MEMORY");
+
+    // Persistence failure surfaces as a 500 (real fault: the data dir is
+    // gone and replaced by a plain file).
+    std::fs::remove_dir_all(&data).unwrap();
+    std::fs::write(&data, "not a dir").unwrap();
+    let res = app
+        .clone()
+        .oneshot(request(
+            "PUT",
+            "/config",
+            Some(serde_json::json!({ "onboarded": true })),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+// The env mutex must stay held across the HTTP awaits — the runtime is
+// single-threaded and the env mutations span the whole test.
+#[allow(clippy::await_holding_lock)]
+#[tokio::test]
 async fn sessions_auto_ground_in_the_repo_origin_remote_over_http() {
     let _guard = catalog_mcp::testutil::ENV_LOCK
         .lock()

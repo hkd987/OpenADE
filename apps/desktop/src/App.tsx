@@ -1,6 +1,13 @@
 import { useCallback, useEffect, useState } from "react";
-import { listSessions, projectName, SessionMeta } from "./api";
+import {
+  DaemonConfig,
+  getConfig,
+  listSessions,
+  projectName,
+  SessionMeta,
+} from "./api";
 import { NewSessionForm } from "./components/NewSessionForm";
+import { Onboarding } from "./components/Onboarding";
 import { SessionCard } from "./components/SessionCard";
 import { SessionDetail } from "./components/SessionDetail";
 
@@ -11,6 +18,7 @@ export default function App() {
   const [selected, setSelected] = useState<string | null>(null);
   const [daemonError, setDaemonError] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
+  const [config, setConfig] = useState<DaemonConfig | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -22,11 +30,22 @@ export default function App() {
     }
   }, []);
 
+  const refreshConfig = useCallback(async () => {
+    // First-run detection; an unreachable daemon just skips onboarding
+    // (the error banner already covers that case).
+    try {
+      setConfig(await getConfig());
+    } catch {
+      setConfig(null);
+    }
+  }, []);
+
   useEffect(() => {
     void refresh();
+    void refreshConfig();
     const timer = setInterval(() => void refresh(), POLL_MS);
     return () => clearInterval(timer);
-  }, [refresh]);
+  }, [refresh, refreshConfig]);
 
   const selectedSession = sessions.find((s) => s.id === selected) ?? null;
 
@@ -43,6 +62,9 @@ export default function App() {
 
   return (
     <div className="app">
+      {config !== null && !config.onboarded && (
+        <Onboarding config={config} onDone={() => void refreshConfig()} />
+      )}
       <header className="app-header">
         <h1>OpenADE</h1>
         <span className="tagline">open agentic development environment</span>

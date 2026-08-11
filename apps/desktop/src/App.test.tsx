@@ -4,11 +4,23 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
 import { SessionMeta } from "./api";
 
-const { listSessions } = vi.hoisted(() => ({ listSessions: vi.fn() }));
+const { listSessions, getConfig } = vi.hoisted(() => ({
+  listSessions: vi.fn(),
+  getConfig: vi.fn(),
+}));
 
 vi.mock("./api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./api")>()),
   listSessions,
+  getConfig,
+}));
+
+vi.mock("./components/Onboarding", () => ({
+  Onboarding: ({ onDone }: { onDone: () => void }) => (
+    <div data-testid="onboarding-stub">
+      <button data-testid="stub-onboard-done" onClick={onDone} />
+    </div>
+  ),
 }));
 
 vi.mock("./components/NewSessionForm", () => ({
@@ -73,9 +85,33 @@ const running: SessionMeta = {
   updated_at: "2026-08-11T10:00:00Z",
 };
 
+const onboardedConfig = {
+  onboarded: true,
+  backstage_base_url: null,
+  backstage_token_set: false,
+  memory_repo: null,
+  memory_sources: ["github"],
+  gh_found: true,
+  gh_authenticated: true,
+};
+
 describe("App", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    getConfig.mockResolvedValue(onboardedConfig);
+  });
+
+  it("shows first-run onboarding until it completes", async () => {
+    getConfig.mockResolvedValue({ ...onboardedConfig, onboarded: false });
+    listSessions.mockResolvedValue({ sessions: [] });
+    render(<App />);
+    expect(await screen.findByTestId("onboarding-stub")).toBeInTheDocument();
+
+    // Completing onboarding re-fetches config and dismisses the overlay.
+    getConfig.mockResolvedValue(onboardedConfig);
+    await userEvent.click(screen.getByTestId("stub-onboard-done"));
+    await act(async () => {});
+    expect(screen.queryByTestId("onboarding-stub")).toBeNull();
   });
 
   it("shows the empty state, then sessions as they appear", async () => {
@@ -93,10 +129,14 @@ describe("App", () => {
 
   it("shows a daemon error banner when unreachable", async () => {
     listSessions.mockRejectedValue(new Error("Failed to fetch"));
+    // Config is equally unreachable — onboarding must not pop up over the
+    // error banner.
+    getConfig.mockRejectedValue(new Error("Failed to fetch"));
     render(<App />);
     expect(await screen.findByTestId("daemon-error")).toHaveTextContent(
       "Failed to fetch",
     );
+    expect(screen.queryByTestId("onboarding-stub")).toBeNull();
   });
 
   it("groups the grid by project", async () => {

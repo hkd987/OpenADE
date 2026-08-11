@@ -33,6 +33,12 @@ daemon or catalog work.
   against (see the Phase 0 spike doc for the checklist).
 - **No telemetry, no credential handling.** Don't add code that phones home or
   touches harness credentials; both are hard product commitments (PRD §7.5).
+- **The README ships with the change.** Documentation is part of the diff,
+  not a follow-up: any change that alters behavior, configuration,
+  workflows, or test counts updates `README.md` (and the affected docs
+  under `docs/`) in the same commit. After a large batch of work, re-read
+  the README top to bottom against the actual product — screenshots,
+  quickstart commands, env knobs, and numbers must all still be true.
 
 ## CI policy: always green
 

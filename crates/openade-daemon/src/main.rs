@@ -22,41 +22,14 @@ async fn main() -> anyhow::Result<()> {
         .and_then(|p| p.parse().ok())
         .unwrap_or(7433);
 
-    let mut daemon = Daemon::open(&data_dir)?;
+    let daemon = Daemon::open(&data_dir)?;
+    // Memory wiring: persisted settings (config.json, written by the UI's
+    // first-run onboarding) merged with the environment — env vars win.
     // Configured memory sources mean entity-launched sessions get context
     // bundles + catalog MCP registration; without any the daemon is a plain
-    // (still fully functional) session manager. Sources: Backstage
-    // (BACKSTAGE_BASE_URL) and/or GitHub via the user's local gh CLI.
-    match catalog_mcp::MemoryRouter::from_env() {
-        Some(router) => {
-            let sources = router.source_names();
-            tracing::info!("memory sources: {}", sources.join(", "));
-            // A logged-out gh fails every GitHub memory call later — say so
-            // once at startup, with the fix.
-            if sources.contains(&"github") {
-                if let Some(gh) = catalog_mcp::github::resolve_gh_bin() {
-                    if let Some(warning) = catalog_mcp::github::gh_auth_warning(&gh) {
-                        tracing::warn!("{warning}");
-                    }
-                }
-            }
-            daemon = daemon.with_catalog(Arc::new(router));
-        }
-        None => {
-            tracing::info!(
-                "memory sources: none — set BACKSTAGE_BASE_URL for Backstage, and/or {} \
-                 for GitHub memory",
-                catalog_mcp::github::GH_SETUP_HINT
-            );
-        }
-    }
-    // Shared team memory: one repo everyone writes to, straight to its
-    // default branch (OPENADE_MEMORY_REPO=owner/name, pushed via the local
-    // gh CLI). Session knowledge lands there immediately for the whole team.
-    if let Some(memory_repo) = openade_daemon::memory_repo::MemoryRepo::from_env() {
-        tracing::info!("shared memory repo: {}", memory_repo.repo());
-        daemon = daemon.with_memory_repo(memory_repo);
-    }
+    // (still fully functional) session manager.
+    let settings = openade_daemon::config::Settings::load(&data_dir);
+    daemon.configure(&settings);
     let daemon = Arc::new(daemon);
     let app = server::router(daemon);
 

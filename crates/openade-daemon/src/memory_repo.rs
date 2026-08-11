@@ -71,25 +71,31 @@ impl MemoryRepo {
         }
     }
 
-    /// Enabled when `OPENADE_MEMORY_REPO=owner/name` is set and a `gh`
-    /// binary resolves (same resolution as the GitHub memory source).
-    /// A configured-but-unusable setup is warned about, not silently
+    /// A shared memory repo from an explicit `owner/name` (env, stored
+    /// settings, or a committed file), resolving the local `gh` CLI. A
+    /// configured-but-unusable setup is warned about, not silently
     /// dropped — the user asked for shared memory and should hear why
     /// they aren't getting it.
-    pub fn from_env() -> Option<Self> {
-        let repo = std::env::var(MEMORY_REPO_ENV).ok()?;
+    pub fn from_name(repo: &str) -> Option<Self> {
         if repo.split('/').filter(|part| !part.is_empty()).count() != 2 {
             tracing::warn!(
-                "ignoring {MEMORY_REPO_ENV}={repo:?}: expected owner/name (e.g. acme/team-memory)"
+                "ignoring shared memory repo {repo:?}: expected owner/name (e.g. acme/team-memory)"
             );
             return None;
         }
         let Some(gh_bin) = catalog_mcp::github::resolve_gh_bin() else {
             let hint = catalog_mcp::github::GH_SETUP_HINT;
-            tracing::warn!("{MEMORY_REPO_ENV} is set but no gh CLI was found — {hint}");
+            tracing::warn!("shared memory repo {repo} configured but no gh CLI was found — {hint}");
             return None;
         };
         Some(MemoryRepo::new(gh_bin, repo))
+    }
+
+    /// Enabled when `OPENADE_MEMORY_REPO=owner/name` is set and a `gh`
+    /// binary resolves (same resolution as the GitHub memory source).
+    pub fn from_env() -> Option<Self> {
+        let repo = std::env::var(MEMORY_REPO_ENV).ok()?;
+        MemoryRepo::from_name(&repo)
     }
 
     /// The shared memory repo a repository declares for itself in its
@@ -103,19 +109,7 @@ impl MemoryRepo {
             .map(str::trim)
             .find(|l| !l.is_empty() && !l.starts_with('#'))?
             .to_string();
-        if repo.split('/').filter(|part| !part.is_empty()).count() != 2 {
-            let root = repo_root.display();
-            tracing::warn!(
-                "ignoring {MEMORY_REPO_FILE} in {root}: expected owner/name, got {repo:?}"
-            );
-            return None;
-        }
-        let Some(gh_bin) = catalog_mcp::github::resolve_gh_bin() else {
-            let hint = catalog_mcp::github::GH_SETUP_HINT;
-            tracing::warn!("{MEMORY_REPO_FILE} names {repo} but no gh CLI was found — {hint}");
-            return None;
-        };
-        Some(MemoryRepo::new(gh_bin, repo))
+        MemoryRepo::from_name(&repo)
     }
 
     /// `owner/name`.

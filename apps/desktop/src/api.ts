@@ -118,6 +118,33 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return (await res.json()) as T;
 }
 
+/** Daemon configuration + memory status (first-run onboarding). */
+export interface DaemonConfig {
+  onboarded: boolean;
+  backstage_base_url: string | null;
+  backstage_token_set: boolean;
+  memory_repo: string | null;
+  memory_sources: string[];
+  gh_found: boolean;
+  gh_authenticated: boolean | null;
+}
+
+/** Settings the onboarding flow saves; env vars still win daemon-side. */
+export interface ConfigUpdate {
+  backstage_base_url?: string;
+  backstage_token?: string;
+  memory_repo?: string;
+  onboarded: boolean;
+}
+
+export function getConfig(): Promise<DaemonConfig> {
+  return request("/config");
+}
+
+export function putConfig(update: ConfigUpdate): Promise<DaemonConfig> {
+  return request("/config", { method: "PUT", body: JSON.stringify(update) });
+}
+
 export function listSessions(): Promise<{ sessions: SessionMeta[] }> {
   return request("/sessions");
 }

@@ -171,4 +171,20 @@ describe("api client", () => {
       harness: "gemini-cli",
     });
   });
+
+  it("reads and writes the daemon config (onboarding)", async () => {
+    const fetch = mockFetch(200, { onboarded: false, memory_sources: [] });
+    const { getConfig, putConfig } = await import("./api");
+    await getConfig();
+    await putConfig({ memory_repo: "acme/team-memory", onboarded: true });
+    const urls = fetch.mock.calls.map((c) => c[0] as string);
+    expect(urls[0]).toContain("/config");
+    expect(urls[1]).toContain("/config");
+    const putInit = fetch.mock.calls[1][1] as RequestInit;
+    expect(putInit.method).toBe("PUT");
+    expect(JSON.parse(putInit.body as string)).toEqual({
+      memory_repo: "acme/team-memory",
+      onboarded: true,
+    });
+  });
 });

@@ -38,8 +38,13 @@ fn find_on_path(program: &str) -> Option<PathBuf> {
 }
 
 /// Resolve the `gh` binary the way every gh-backed feature does:
-/// `OPENADE_GH_BIN` override first, then PATH.
+/// `OPENADE_GITHUB_MEMORY=0` is the kill switch for everything gh-backed
+/// (memory source, shared memory repo, status probes); otherwise the
+/// `OPENADE_GH_BIN` override wins, then PATH.
 pub fn resolve_gh_bin() -> Option<PathBuf> {
+    if std::env::var("OPENADE_GITHUB_MEMORY").as_deref() == Ok("0") {
+        return None;
+    }
     if let Some(bin) = std::env::var_os("OPENADE_GH_BIN").filter(|v| !v.is_empty()) {
         return Some(PathBuf::from(bin));
     }

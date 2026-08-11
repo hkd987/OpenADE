@@ -24,6 +24,9 @@ function git(cwd: string, ...args: string[]) {
 export default function prepareWorld() {
   fs.rmSync(tmpDir, { recursive: true, force: true });
   fs.mkdirSync(path.join(tmpDir, "data"), { recursive: true });
+  // A second, unconfigured daemon world for the first-run onboarding flow
+  // (the main daemon has memory env vars set, which counts as onboarded).
+  fs.mkdirSync(path.join(tmpDir, "data-onboarding"), { recursive: true });
 
   // Fixture repository.
   const repo = path.join(tmpDir, "fixture-repo");
@@ -81,6 +84,9 @@ export default function prepareWorld() {
     `#!/bin/sh
 STATE="${teamMemory}"
 case "$*" in
+  "auth status"*)
+    exit 0
+    ;;
   "api -X PUT repos/acme/team-memory/contents/"*)
     file="\${4#repos/acme/team-memory/contents/}"
     if [ -e "$STATE/$file" ]; then

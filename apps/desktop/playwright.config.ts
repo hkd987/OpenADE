@@ -16,6 +16,9 @@ import prepareWorld from "./e2e/global-setup";
 const tmpDir = path.resolve(__dirname, "e2e/.tmp");
 const daemonPort = 7455;
 const uiPort = 5199;
+// Second, unconfigured daemon + UI pair: exercises first-run onboarding.
+const onboardingDaemonPort = 7456;
+const onboardingUiPort = 5198;
 
 // Build the fixture world NOW — the daemon webServer boots against these
 // paths before any globalSetup hook would run. Guarded: this config is
@@ -79,6 +82,22 @@ export default defineConfig({
       },
     },
     {
+      // First-run onboarding daemon: no memory env vars, no config file —
+      // the UI must show the welcome flow. The gh shim is still on PATH
+      // (zero-config GitHub memory) and serves the team-memory contents
+      // API so saved settings are exercised end to end.
+      command: "cargo run --quiet -p openade-daemon",
+      cwd: path.resolve(__dirname, "../.."),
+      url: `http://127.0.0.1:${onboardingDaemonPort}/health`,
+      timeout: 600_000,
+      reuseExistingServer: false,
+      env: {
+        OPENADE_DAEMON_PORT: String(onboardingDaemonPort),
+        OPENADE_DATA_DIR: path.join(tmpDir, "data-onboarding"),
+        PATH: `${path.join(tmpDir, "bin")}:${process.env.PATH ?? ""}`,
+      },
+    },
+    {
       // Bind 127.0.0.1 explicitly: on CI runners `localhost` can resolve to
       // ::1, and Playwright polls the IPv4 address.
       command: `npm run dev -- --host 127.0.0.1 --port ${uiPort} --strictPort`,
@@ -87,6 +106,15 @@ export default defineConfig({
       reuseExistingServer: false,
       env: {
         VITE_OPENADE_DAEMON_URL: `http://127.0.0.1:${daemonPort}`,
+      },
+    },
+    {
+      command: `npm run dev -- --host 127.0.0.1 --port ${onboardingUiPort} --strictPort`,
+      url: `http://127.0.0.1:${onboardingUiPort}`,
+      timeout: 120_000,
+      reuseExistingServer: false,
+      env: {
+        VITE_OPENADE_DAEMON_URL: `http://127.0.0.1:${onboardingDaemonPort}`,
       },
     },
   ],

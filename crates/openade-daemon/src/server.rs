@@ -31,6 +31,7 @@ pub fn router(daemon: Arc<Daemon>) -> Router {
         .route("/sessions/{id}/artifact", post(post_artifact))
         .route("/sessions/{id}/handoff", post(post_handoff))
         .route("/projects", get(list_projects))
+        .route("/config", get(get_config).put(put_config))
         // The daemon binds loopback-only; the UI (vite dev server, Tauri
         // webview) is a different origin, so CORS must be open for it.
         .layer(tower_http::cors::CorsLayer::permissive())
@@ -58,6 +59,63 @@ impl From<DaemonError> for ApiError {
 
 async fn health() -> Json<serde_json::Value> {
     Json(serde_json::json!({ "status": "ok", "version": env!("CARGO_PKG_VERSION") }))
+}
+
+/// Daemon configuration + memory status for the UI (first-run onboarding
+/// and settings). The token itself is never echoed back.
+fn config_status(daemon: &Daemon) -> serde_json::Value {
+    let settings = daemon.settings();
+    let gh_bin = catalog_mcp::github::resolve_gh_bin();
+    let gh_authenticated = gh_bin
+        .as_ref()
+        .map(|bin| catalog_mcp::github::gh_auth_warning(bin).is_none());
+    serde_json::json!({
+        "onboarded": settings.effective_onboarded(),
+        "backstage_base_url": settings
+            .effective_backstage()
+            .map(|c| c.base_url),
+        "backstage_token_set": settings
+            .effective_backstage()
+            .is_some_and(|c| c.token.is_some()),
+        "memory_repo": settings.effective_memory_repo(),
+        "memory_sources": daemon.memory_sources(),
+        "gh_found": gh_bin.is_some(),
+        "gh_authenticated": gh_authenticated,
+    })
+}
+
+async fn get_config(State(daemon): State<Arc<Daemon>>) -> Json<serde_json::Value> {
+    // The gh probe is a subprocess; keep the async runtime clean. The task
+    // only fails if it panics, which would be a bug worth crashing on.
+    let status = tokio::task::spawn_blocking(move || config_status(&daemon))
+        .await
+        .expect("config status task panicked");
+    Json(status)
+}
+
+async fn put_config(
+    State(daemon): State<Arc<Daemon>>,
+    Json(settings): Json<crate::config::Settings>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    if let Some(repo) = settings.memory_repo.as_ref().filter(|r| !r.is_empty()) {
+        if repo.split('/').filter(|part| !part.is_empty()).count() != 2 {
+            return Err(ApiError(
+                StatusCode::BAD_REQUEST,
+                format!("memory_repo must be owner/name (got {repo:?})"),
+            ));
+        }
+    }
+    let result = tokio::task::spawn_blocking(move || {
+        daemon
+            .apply_settings(settings)
+            .map(|()| config_status(&daemon))
+    })
+    .await
+    .expect("config apply task panicked");
+    match result {
+        Ok(status) => Ok(Json(status)),
+        Err(e) => Err(ApiError(StatusCode::INTERNAL_SERVER_ERROR, e)),
+    }
 }
 
 #[derive(Deserialize)]

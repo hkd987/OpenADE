@@ -128,16 +128,30 @@ curl -s -X POST localhost:7433/sessions -H 'content-type: application/json' -d '
 cd apps/desktop && npm install && npm run dev
 ```
 
+**First run:** the app opens with a 30-second onboarding that checks your
+GitHub CLI (and tells you exactly how to fix it if it's missing or signed
+out) and collects the optional settings — Backstage URL/token and the
+shared team memory repo. Saved settings live in the daemon's
+`config.json` (under `OPENADE_DATA_DIR`) and apply immediately, no
+restart; environment variables always take precedence over them.
+Everything is skippable because GitHub memory is zero-config.
+
+![First-run onboarding](docs/img/onboarding.png)
+
 Useful daemon endpoints: `GET /sessions`, `GET /sessions/{id}/scrollback`,
 `POST /sessions/{id}/input`, `GET /sessions/{id}/diff`, `.../files`,
 `POST /sessions/{id}/artifact`, `POST /sessions/{id}/handoff`,
-`DELETE /sessions/{id}`, `DELETE /sessions/{id}/worktree`, `GET /projects`.
+`DELETE /sessions/{id}`, `DELETE /sessions/{id}/worktree`, `GET /projects`,
+`GET`/`PUT /config` (settings + memory/gh status, used by onboarding).
 
 Environment knobs: `OPENADE_DAEMON_PORT` (default 7433), `OPENADE_DATA_DIR`
-(default `~/.openade` — transcripts, session index, worktrees),
+(default `~/.openade` — transcripts, session index, worktrees, and the
+onboarding-written `config.json`),
 `BACKSTAGE_BASE_URL` / `BACKSTAGE_TOKEN` (Backstage memory source),
-`OPENADE_GH_BIN` / `OPENADE_GITHUB_MEMORY=0` (GitHub memory source — defaults
-to the `gh` CLI on PATH), `OPENADE_MEMORY_REPO=owner/name` (daemon-wide
+`OPENADE_GH_BIN` (gh binary override; defaults to the `gh` CLI on PATH),
+`OPENADE_GITHUB_MEMORY=0` (kill switch for everything gh-backed: the GitHub
+memory source, the shared memory repo, and status probes),
+`OPENADE_MEMORY_REPO=owner/name` (daemon-wide
 shared team memory repo; a repository's committed `.openade/memory-repo`
 file takes precedence — artifacts are pushed directly to its default
 branch, so everyone on it needs write access),
@@ -191,9 +205,9 @@ everything else → Backstage) — neither backend is a hard dependency.
 ## Testing
 
 ```sh
-cargo test                                        # 162 Rust tests (real git, real PTYs, mock Backstage, fake gh, fault injection)
+cargo test                                        # 166 Rust tests (real git, real PTYs, mock Backstage, fake gh, fault injection)
 cd apps/desktop && npm test                       # UI unit tests (vitest)
-cd apps/desktop && npm run e2e                    # 11 Playwright flows: real daemon + mock Backstage + gh shim + real Chromium
+cd apps/desktop && npm run e2e                    # 12 Playwright flows: real daemon + mock Backstage + gh shim + real Chromium
 ```
 
 Product-code line coverage is 100% on both the Rust workspace and the UI —

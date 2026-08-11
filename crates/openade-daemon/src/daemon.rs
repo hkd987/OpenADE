@@ -74,14 +74,24 @@ pub enum DaemonError {
     Io(#[from] std::io::Error),
 }
 
+/// Memory wiring, replaceable at runtime (onboarding saves settings and
+/// applies them without a restart).
+#[derive(Default)]
+struct MemoryState {
+    catalog: Option<Arc<dyn CatalogProvider>>,
+    memory_repo: Option<MemoryRepo>,
+    /// Display names of the active sources (for /config and logs).
+    source_names: Vec<String>,
+}
+
 /// The daemon: owns every live session.
 pub struct Daemon {
     data_dir: PathBuf,
     pty: PtyHost,
     store: TranscriptStore,
     sessions: Mutex<HashMap<Uuid, SessionMeta>>,
-    catalog: Option<Arc<dyn CatalogProvider>>,
-    memory_repo: Option<MemoryRepo>,
+    memory: std::sync::RwLock<MemoryState>,
+    settings: std::sync::RwLock<crate::config::Settings>,
 }
 
 impl Daemon {
@@ -95,29 +105,129 @@ impl Daemon {
             pty: PtyHost::new(),
             store,
             sessions: Mutex::new(HashMap::new()),
-            catalog: None,
-            memory_repo: None,
+            memory: std::sync::RwLock::new(MemoryState::default()),
+            settings: std::sync::RwLock::new(crate::config::Settings::default()),
         })
+    }
+
+    fn memory_read(&self) -> std::sync::RwLockReadGuard<'_, MemoryState> {
+        self.memory.read().unwrap_or_else(|e| e.into_inner())
     }
 
     /// Attach a catalog provider; sessions launched from an entity get a
     /// context bundle injected (PRD R5/G2).
-    pub fn with_catalog(mut self, provider: Arc<dyn CatalogProvider>) -> Self {
-        self.catalog = Some(provider);
+    pub fn with_catalog(self, provider: Arc<dyn CatalogProvider>) -> Self {
+        {
+            let mut memory = self.memory.write().unwrap_or_else(|e| e.into_inner());
+            memory.catalog = Some(provider);
+            memory.source_names = vec!["catalog".to_string()];
+        }
         self
     }
 
     /// Whether a catalog backend is configured.
     pub fn has_catalog(&self) -> bool {
-        self.catalog.is_some()
+        self.memory_read().catalog.is_some()
+    }
+
+    /// The active catalog provider, if any.
+    fn catalog(&self) -> Option<Arc<dyn CatalogProvider>> {
+        self.memory_read().catalog.clone()
+    }
+
+    /// The daemon-wide shared memory repo, if any.
+    fn daemon_memory_repo(&self) -> Option<MemoryRepo> {
+        self.memory_read().memory_repo.clone()
+    }
+
+    /// Names of the active memory sources (for /config and logs).
+    pub fn memory_sources(&self) -> Vec<String> {
+        self.memory_read().source_names.clone()
+    }
+
+    /// The stored (persisted) settings.
+    pub fn settings(&self) -> crate::config::Settings {
+        self.settings
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     /// Attach a shared team memory repository: published knowledge is also
     /// committed straight to its default branch, and its index feeds
     /// entity context bundles.
-    pub fn with_memory_repo(mut self, memory_repo: MemoryRepo) -> Self {
-        self.memory_repo = Some(memory_repo);
+    pub fn with_memory_repo(self, memory_repo: MemoryRepo) -> Self {
+        self.memory
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .memory_repo = Some(memory_repo);
         self
+    }
+
+    /// Wire memory from `settings` merged with the environment (env wins),
+    /// replacing whatever was active. Called at startup with the persisted
+    /// settings and again whenever `PUT /config` saves new ones — the
+    /// onboarding flow applies live, no restart.
+    pub fn configure(&self, settings: &crate::config::Settings) {
+        let backstage = settings.effective_backstage().map(|config| {
+            tracing::info!("memory source: Backstage at {}", config.base_url);
+            Arc::new(catalog_mcp::backstage::BackstageProvider::new(config))
+                as Arc<dyn CatalogProvider>
+        });
+        let github = match catalog_mcp::github::GithubProvider::from_env() {
+            Ok(provider) => {
+                tracing::info!("memory source: GitHub via the local gh CLI");
+                // A logged-out gh fails every call later — say so once, with
+                // the fix.
+                let auth_warning = catalog_mcp::github::resolve_gh_bin()
+                    .and_then(|gh| catalog_mcp::github::gh_auth_warning(&gh));
+                if let Some(warning) = auth_warning {
+                    tracing::warn!("{warning}");
+                }
+                Some(Arc::new(provider) as Arc<dyn CatalogProvider>)
+            }
+            Err(reason) => {
+                tracing::debug!("github memory source not configured: {reason}");
+                None
+            }
+        };
+        let router = catalog_mcp::MemoryRouter::new(backstage, github);
+        let memory_repo = settings
+            .effective_memory_repo()
+            .and_then(|name| MemoryRepo::from_name(&name));
+        {
+            let mut memory = self.memory.write().unwrap_or_else(|e| e.into_inner());
+            memory.source_names = match &router {
+                Some(router) => router
+                    .source_names()
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect(),
+                None => Vec::new(),
+            };
+            if memory.source_names.is_empty() {
+                let hint = catalog_mcp::github::GH_SETUP_HINT;
+                tracing::info!(
+                    "memory sources: none — set BACKSTAGE_BASE_URL for Backstage, and/or {hint} \
+                     for GitHub memory"
+                );
+            } else {
+                tracing::info!("memory sources: {}", memory.source_names.join(", "));
+            }
+            if let Some(repo) = &memory_repo {
+                tracing::info!("shared memory repo: {}", repo.repo());
+            }
+            memory.catalog = router.map(|r| Arc::new(r) as Arc<dyn CatalogProvider>);
+            memory.memory_repo = memory_repo;
+        }
+        *self.settings.write().unwrap_or_else(|e| e.into_inner()) = settings.clone();
+    }
+
+    /// Persist new settings and apply them immediately.
+    pub fn apply_settings(&self, settings: crate::config::Settings) -> Result<(), String> {
+        settings.save(&self.data_dir)?;
+        self.configure(&settings);
+        Ok(())
     }
 
     /// The transcript store (read access for API queries).
@@ -147,7 +257,7 @@ impl Daemon {
         entity_ref: &str,
         repo_root: Option<&std::path::Path>,
     ) -> Option<ContextBundle> {
-        let catalog = self.catalog.as_ref()?;
+        let catalog = self.catalog()?;
         let parsed: EntityRef = match entity_ref.parse() {
             Ok(r) => r,
             Err(e) => {
@@ -176,7 +286,7 @@ impl Daemon {
     /// callers fall back to launching without context. This is what makes
     /// memory zero-config: sessions ground themselves.
     pub fn infer_entity_ref(&self, repo_root: &std::path::Path) -> Option<String> {
-        self.catalog.as_ref()?;
+        self.catalog()?;
         // Same enablement rules as the GitHub memory source itself
         // (OPENADE_GITHUB_MEMORY=0 disables; a gh binary must resolve).
         catalog_mcp::github::GithubProvider::from_env().ok()?;
@@ -200,7 +310,7 @@ impl Daemon {
     fn memory_repo_for(&self, repo_root: Option<&std::path::Path>) -> Option<MemoryRepo> {
         repo_root
             .and_then(MemoryRepo::for_repo)
-            .or_else(|| self.memory_repo.clone())
+            .or_else(|| self.daemon_memory_repo())
     }
 
     /// Fold the shared team memory repo into a bundle: recent index entries
@@ -329,7 +439,7 @@ impl Daemon {
         // A configured catalog means entity-launched sessions get the MCP
         // server registered automatically (deeper retrieval on demand).
         let mut mcp_servers = req.mcp_servers.clone();
-        if self.catalog.is_some()
+        if self.has_catalog()
             && req.entity_ref.is_some()
             && !mcp_servers.iter().any(|s| s.name == "catalog")
         {

@@ -464,6 +464,60 @@ fn sessions_auto_ground_in_the_repo_origin_remote() {
 }
 
 #[test]
+fn configure_wires_memory_from_settings_and_env() {
+    let _guard = catalog_mcp::testutil::ENV_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    for var in [
+        "BACKSTAGE_BASE_URL",
+        "BACKSTAGE_TOKEN",
+        "OPENADE_MEMORY_REPO",
+        "OPENADE_GH_BIN",
+    ] {
+        std::env::remove_var(var);
+    }
+    // Kill switch: everything gh-backed is off for the first sections.
+    std::env::set_var("OPENADE_GITHUB_MEMORY", "0");
+
+    let tmp = TempDir::new().unwrap();
+    let data = tmp.path().join("data");
+    let daemon = Daemon::open(&data).unwrap();
+
+    // Nothing configured anywhere → no memory, still a working daemon.
+    daemon.configure(&crate::config::Settings::default());
+    assert!(!daemon.has_catalog());
+    assert!(daemon.memory_sources().is_empty());
+
+    // Stored settings (as onboarding saves them): Backstage becomes a
+    // source; the shared memory repo needs a gh CLI, which is disabled, so
+    // it is dropped with a warning.
+    let settings = crate::config::Settings {
+        backstage_base_url: Some("http://127.0.0.1:9/api".into()),
+        backstage_token: Some("token".into()),
+        memory_repo: Some("acme/team-memory".into()),
+        onboarded: true,
+    };
+    daemon.configure(&settings);
+    assert!(daemon.has_catalog());
+    assert_eq!(daemon.memory_sources(), vec!["backstage"]);
+    assert_eq!(daemon.settings(), settings);
+
+    // With gh back (explicit binary) the github source joins (specific
+    // kinds first).
+    std::env::remove_var("OPENADE_GITHUB_MEMORY");
+    std::env::set_var("OPENADE_GH_BIN", "/custom/gh");
+    daemon.configure(&settings);
+    assert_eq!(daemon.memory_sources(), vec!["github", "backstage"]);
+
+    // apply_settings persists and re-wires in one step.
+    daemon.apply_settings(settings.clone()).unwrap();
+    assert!(data.join("config.json").exists());
+    assert_eq!(crate::config::Settings::load(&data), settings);
+
+    std::env::remove_var("OPENADE_GH_BIN");
+}
+
+#[test]
 fn committed_memory_repo_file_configures_shared_memory_per_repo() {
     let _guard = catalog_mcp::testutil::ENV_LOCK
         .lock()

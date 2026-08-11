@@ -229,15 +229,12 @@ fn for_repo_reads_the_committed_memory_repo_file() {
     fs::write(root.join(MEMORY_REPO_FILE), "not-owner-name\n").unwrap();
     assert!(MemoryRepo::for_repo(root).is_none());
 
-    // Valid file but no gh anywhere: warned and disabled.
+    // Valid file but gh disabled/unavailable: warned and disabled.
     fs::write(root.join(MEMORY_REPO_FILE), "acme/team-memory\n").unwrap();
-    std::env::remove_var("OPENADE_GH_BIN");
-    let old_path = std::env::var_os("PATH");
-    std::env::set_var("PATH", "");
+    std::env::set_var("OPENADE_GITHUB_MEMORY", "0");
     assert!(MemoryRepo::for_repo(root).is_none());
-    if let Some(path) = old_path {
-        std::env::set_var("PATH", path);
-    }
+    std::env::remove_var("OPENADE_GITHUB_MEMORY");
+    std::env::remove_var("OPENADE_GH_BIN");
 }
 
 #[test]
@@ -258,16 +255,13 @@ fn from_env_requires_owner_name_and_a_gh_binary() {
         assert!(MemoryRepo::from_env().is_none(), "accepted {bad:?}");
     }
 
-    // Configured repo but no gh binary anywhere (empty PATH, no override):
-    // warned about and disabled rather than silently half-working.
+    // Configured repo but gh disabled/unavailable: warned about and
+    // disabled rather than silently half-working.
     std::env::set_var(MEMORY_REPO_ENV, "acme/team-memory");
     std::env::remove_var("OPENADE_GH_BIN");
-    let old_path = std::env::var_os("PATH");
-    std::env::set_var("PATH", "");
+    std::env::set_var("OPENADE_GITHUB_MEMORY", "0");
     assert!(MemoryRepo::from_env().is_none());
-    if let Some(path) = old_path {
-        std::env::set_var("PATH", path);
-    }
+    std::env::remove_var("OPENADE_GITHUB_MEMORY");
 
     // Unset → disabled.
     std::env::remove_var(MEMORY_REPO_ENV);
