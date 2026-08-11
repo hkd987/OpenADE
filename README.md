@@ -222,7 +222,7 @@ the by-hand verification (including the native Tauri shell under WebKitGTK)
 is in [docs/manual-e2e.md](docs/manual-e2e.md).
 
 CI runs fmt, clippy (`-D warnings`), all three test layers, and a
-Tauri-shell compile check. Releases are one button: Actions → Release → "Run workflow" on main reads the version from Cargo.toml, runs the verification gate, builds the binaries, and publishes the tagged GitHub Release (tag pushes also work; see
+Tauri-shell compile check. Releases are automatic: every push to main reads the version from Cargo.toml and, if v<version> is unreleased, runs the verification gate, builds the binaries, and publishes the tagged GitHub Release — bump the version, merge, done (tag pushes and manual dispatch also work; see
 `.github/workflows/release.yml`).
 
 ## Principles

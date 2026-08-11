@@ -1,21 +1,24 @@
 name: Release
 
-# One-button releases: press "Run workflow" on main (Actions → Release)
-# and everything happens — the version is read from Cargo.toml, the full
-# verification gate runs, binaries build for macOS and Linux, and a GitHub
-# Release is published with the v<version> tag created server-side.
-# Pushing a v* tag still works as a manual path. See README "Install".
+# Hands-off releases: every push/merge to main reads the version from
+# Cargo.toml — if v<version> hasn't been released yet, the pipeline runs
+# the verification gate, builds macOS + Linux binaries, and publishes the
+# GitHub Release (tag created server-side). Pushes that don't bump the
+# version resolve to "already released" and skip everything. Tag pushes
+# and manual dispatch remain as fallback paths. See README "Install".
 
 on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
   workflow_dispatch:
     inputs:
       tag:
         description: "Release tag (blank = v<version> from Cargo.toml)"
         required: false
         default: ""
-  push:
-    tags:
-      - "v*"
 
 permissions:
   contents: write
@@ -26,29 +29,42 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       tag: ${{ steps.pick.outputs.tag }}
+      release: ${{ steps.pick.outputs.release }}
     steps:
       - uses: actions/checkout@v4
-      - name: Pick the tag and refuse re-releases
+      - name: Pick the tag; skip versions that are already released
         id: pick
         run: |
           if [ -n "${{ github.event.inputs.tag }}" ]; then
             tag="${{ github.event.inputs.tag }}"
-          elif [ "${{ github.event_name }}" = "push" ]; then
+          elif [ "${GITHUB_REF}" = "refs/tags/${GITHUB_REF_NAME}" ] \
+               && [ "${{ github.event_name }}" = "push" ] \
+               && case "$GITHUB_REF" in refs/tags/*) true;; *) false;; esac; then
             tag="${GITHUB_REF_NAME}"
           else
             version=$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)
             tag="v${version}"
           fi
           echo "tag=${tag}" >> "$GITHUB_OUTPUT"
-          if [ "${{ github.event_name }}" != "push" ] \
-             && git ls-remote --tags origin "refs/tags/${tag}" | grep -q .; then
-            echo "::error::${tag} already exists — bump version in Cargo.toml first"
-            exit 1
+          if [ "$GITHUB_REF" = "refs/tags/${tag}" ]; then
+            # The tag push itself is the release request.
+            echo "release=true" >> "$GITHUB_OUTPUT"
+          elif git ls-remote --tags origin "refs/tags/${tag}" | grep -q .; then
+            if [ -n "${{ github.event.inputs.tag }}" ]; then
+              echo "::error::${tag} already exists — bump version in Cargo.toml first"
+              exit 1
+            fi
+            echo "${tag} is already released — nothing to do."
+            echo "release=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Releasing ${tag}."
+            echo "release=true" >> "$GITHUB_OUTPUT"
           fi
 
   verify:
     name: Verify before release
     needs: resolve
+    if: needs.resolve.outputs.release == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -60,6 +76,7 @@ jobs:
   build:
     name: Build ${{ matrix.target }}
     needs: [resolve, verify]
+    if: needs.resolve.outputs.release == 'true'
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -107,6 +124,7 @@ jobs:
   publish:
     name: Publish GitHub Release
     needs: [resolve, build]
+    if: needs.resolve.outputs.release == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
