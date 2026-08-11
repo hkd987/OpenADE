@@ -55,6 +55,9 @@ jobs:
         working-directory: apps/desktop
       - run: npx playwright install --with-deps chromium
         working-directory: apps/desktop
+      # Prebuild so the Playwright daemon webServer starts instantly instead
+      # of compiling inside its startup timeout.
+      - run: cargo build -p openade-daemon
       - run: npx playwright test
         working-directory: apps/desktop
       - uses: actions/upload-artifact@v4

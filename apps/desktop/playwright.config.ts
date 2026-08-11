@@ -59,10 +59,12 @@ export default defineConfig({
       reuseExistingServer: false,
     },
     {
+      // CI prebuilds the daemon in its own step; the generous timeout only
+      // matters for cold local runs where `cargo run` compiles first.
       command: "cargo run --quiet -p openade-daemon",
       cwd: path.resolve(__dirname, "../.."),
       url: `http://127.0.0.1:${daemonPort}/health`,
-      timeout: 240_000,
+      timeout: 600_000,
       reuseExistingServer: false,
       env: {
         OPENADE_DAEMON_PORT: String(daemonPort),
@@ -74,7 +76,9 @@ export default defineConfig({
       },
     },
     {
-      command: `npm run dev -- --port ${uiPort} --strictPort`,
+      // Bind 127.0.0.1 explicitly: on CI runners `localhost` can resolve to
+      // ::1, and Playwright polls the IPv4 address.
+      command: `npm run dev -- --host 127.0.0.1 --port ${uiPort} --strictPort`,
       url: `http://127.0.0.1:${uiPort}`,
       timeout: 120_000,
       reuseExistingServer: false,

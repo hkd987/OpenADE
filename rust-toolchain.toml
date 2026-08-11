@@ -1,0 +1,6 @@
+# Pin the toolchain so local development, CI, and releases all lint and
+# build with the same compiler — new stable clippy lints land via a
+# deliberate bump here, not as surprise CI failures.
+[toolchain]
+channel = "1.97.0"
+components = ["rustfmt", "clippy"]
