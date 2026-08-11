@@ -175,6 +175,72 @@ fn publish_surfaces_gh_failures() {
 }
 
 #[test]
+fn github_remotes_parse_to_repo_entities() {
+    for url in [
+        "git@github.com:acme/payments.git",
+        "https://github.com/acme/payments",
+        "https://github.com/acme/payments.git",
+        "https://github.com/acme/payments/",
+        "ssh://git@github.com/acme/payments.git",
+        "https://github.acme-corp.com/acme/payments", // GitHub Enterprise
+    ] {
+        assert_eq!(
+            github_entity_from_remote(url).as_deref(),
+            Some("repo:acme/payments"),
+            "{url}"
+        );
+    }
+    for url in [
+        "https://gitlab.com/acme/payments.git", // not GitHub — no repo: memory
+        "git@gitlab.com:acme/payments.git",
+        "https://github.com/acme",                // no repo segment
+        "https://github.com/acme/payments/extra", // too deep
+        "/local/bare/repo.git",                   // not a URL
+        "",
+    ] {
+        assert_eq!(github_entity_from_remote(url), None, "{url}");
+    }
+}
+
+#[test]
+fn for_repo_reads_the_committed_memory_repo_file() {
+    let _guard = catalog_mcp::testutil::ENV_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    std::env::set_var("OPENADE_GH_BIN", "/custom/gh");
+
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+
+    // No file → no team-level memory repo.
+    assert!(MemoryRepo::for_repo(root).is_none());
+
+    // Committed config: comments and blank lines are fine.
+    fs::create_dir_all(root.join(".openade")).unwrap();
+    fs::write(
+        root.join(MEMORY_REPO_FILE),
+        "# where session knowledge goes\n\nacme/team-memory\n",
+    )
+    .unwrap();
+    let repo = MemoryRepo::for_repo(root).unwrap();
+    assert_eq!(repo.repo(), "acme/team-memory");
+
+    // Junk content is warned about and ignored.
+    fs::write(root.join(MEMORY_REPO_FILE), "not-owner-name\n").unwrap();
+    assert!(MemoryRepo::for_repo(root).is_none());
+
+    // Valid file but no gh anywhere: warned and disabled.
+    fs::write(root.join(MEMORY_REPO_FILE), "acme/team-memory\n").unwrap();
+    std::env::remove_var("OPENADE_GH_BIN");
+    let old_path = std::env::var_os("PATH");
+    std::env::set_var("PATH", "");
+    assert!(MemoryRepo::for_repo(root).is_none());
+    if let Some(path) = old_path {
+        std::env::set_var("PATH", path);
+    }
+}
+
+#[test]
 fn from_env_requires_owner_name_and_a_gh_binary() {
     let _guard = catalog_mcp::testutil::ENV_LOCK
         .lock()

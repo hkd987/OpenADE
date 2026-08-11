@@ -19,6 +19,42 @@ use base64::Engine;
 /// Configure with `OPENADE_MEMORY_REPO=owner/name`.
 pub const MEMORY_REPO_ENV: &str = "OPENADE_MEMORY_REPO";
 
+/// Repo-relative path of the committed team configuration: one
+/// `owner/name` line naming the shared memory repository. Committed once
+/// by the team, picked up by every member's OpenADE with zero setup.
+pub const MEMORY_REPO_FILE: &str = ".openade/memory-repo";
+
+/// `owner/name` from a GitHub remote URL, as a `repo:` entity ref.
+/// Understands the shapes `git remote get-url` produces — scp-like
+/// (`git@github.com:owner/name.git`), ssh://, and https:// — for
+/// github.com and GitHub Enterprise hosts (any host containing "github").
+/// Non-GitHub remotes return `None`: they have no `repo:` memory to offer.
+pub fn github_entity_from_remote(url: &str) -> Option<String> {
+    let url = url.trim().trim_end_matches('/');
+    let url = url.strip_suffix(".git").unwrap_or(url);
+    // Normalize the scp-like form to host/owner/name; URL forms
+    // (ssh://git@host/owner/name, https://host/owner/name) drop the scheme.
+    let rest = match url.strip_prefix("git@") {
+        Some(rest) => rest.replacen(':', "/", 1),
+        None => url
+            .split_once("://")?
+            .1
+            .trim_start_matches("git@")
+            .to_string(),
+    };
+    let mut parts = rest.split('/').filter(|p| !p.is_empty());
+    let host = parts.next()?;
+    if !host.contains("github") {
+        return None;
+    }
+    let owner = parts.next()?;
+    let name = parts.next()?;
+    if parts.next().is_some() {
+        return None;
+    }
+    Some(format!("repo:{owner}/{name}"))
+}
+
 /// A writable shared memory repository, driven by the local `gh` CLI.
 #[derive(Debug, Clone)]
 pub struct MemoryRepo {
@@ -51,6 +87,32 @@ impl MemoryRepo {
         let Some(gh_bin) = catalog_mcp::github::resolve_gh_bin() else {
             let hint = catalog_mcp::github::GH_SETUP_HINT;
             tracing::warn!("{MEMORY_REPO_ENV} is set but no gh CLI was found — {hint}");
+            return None;
+        };
+        Some(MemoryRepo::new(gh_bin, repo))
+    }
+
+    /// The shared memory repo a repository declares for itself in its
+    /// committed [`MEMORY_REPO_FILE`] (first non-comment line, `owner/name`).
+    /// Team-level configuration: commit the file once and every member's
+    /// OpenADE reads and writes the same memory with zero personal setup.
+    pub fn for_repo(repo_root: &std::path::Path) -> Option<Self> {
+        let content = std::fs::read_to_string(repo_root.join(MEMORY_REPO_FILE)).ok()?;
+        let repo = content
+            .lines()
+            .map(str::trim)
+            .find(|l| !l.is_empty() && !l.starts_with('#'))?
+            .to_string();
+        if repo.split('/').filter(|part| !part.is_empty()).count() != 2 {
+            let root = repo_root.display();
+            tracing::warn!(
+                "ignoring {MEMORY_REPO_FILE} in {root}: expected owner/name, got {repo:?}"
+            );
+            return None;
+        }
+        let Some(gh_bin) = catalog_mcp::github::resolve_gh_bin() else {
+            let hint = catalog_mcp::github::GH_SETUP_HINT;
+            tracing::warn!("{MEMORY_REPO_FILE} names {repo} but no gh CLI was found — {hint}");
             return None;
         };
         Some(MemoryRepo::new(gh_bin, repo))

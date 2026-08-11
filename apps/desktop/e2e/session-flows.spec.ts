@@ -25,6 +25,7 @@ test("grid starts empty and the daemon is reachable", async ({
 
 test("launching a session from the form attaches a live terminal", async ({
   page,
+  request,
 }) => {
   await page.goto("/");
   await page.getByTestId("toggle-new-session").click();
@@ -45,6 +46,19 @@ test("launching a session from the form attaches a live terminal", async ({
   await expect(page.getByTestId("terminal-view")).toContainText(
     "do the e2e thing",
   );
+
+  // Zero-config memory: no entity was typed, so the session auto-grounded
+  // in the repo's own GitHub origin remote — the chip appears and the
+  // worktree carries the gh-built context bundle.
+  const chip = card.getByTestId("entity-chip");
+  await expect(chip).toContainText("repo");
+  await expect(chip).toContainText("acme/checkout-service");
+  const sessions = await request.get(`${daemon}/sessions`);
+  const worktree = (await sessions.json()).sessions[0]
+    .worktree_path as string;
+  const rules = fs.readFileSync(path.join(worktree, "CLAUDE.md"), "utf8");
+  expect(rules).toContain("acme/checkout-service");
+  expect(rules).toContain("group:acme/checkout-team");
 });
 
 test("diff and file views reflect worktree changes", async ({
@@ -213,13 +227,18 @@ test("repo-entity sessions carry GitHub memory via the gh CLI", async ({
   await expect(chip).toContainText("acme/checkout-service");
 
   // The worktree rules carry context built from the gh shim: repo
-  // description + CODEOWNERS-derived team ownership.
+  // description + CODEOWNERS-derived team ownership. The entity filter
+  // also includes the earlier auto-grounded sessions — pick this one by
+  // title.
   const sessions = await (
     await request.get(`${daemon}/sessions?entity=repo:acme/checkout-service`)
   ).json();
-  expect(sessions.sessions.length).toBe(1);
+  const record = sessions.sessions.find(
+    (s: { title: string }) => s.title === "repo task",
+  );
+  expect(record).toBeDefined();
   const meta = await (
-    await request.get(`${daemon}/sessions/${sessions.sessions[0].id}`)
+    await request.get(`${daemon}/sessions/${record.id}`)
   ).json();
   const rules = fs.readFileSync(
     path.join(meta.worktree_path, "CLAUDE.md"),

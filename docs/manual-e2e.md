@@ -95,6 +95,8 @@ button presses — rather than through the HTTP API:
 | 31 | Artifact button | Banner shows the review branch **and** "Also pushed to team memory acme/team-memory" with a link to the shared document (screenshot below); the shared repo state gained `sessions/…md` + updated `index.md` |
 | 32 | Team knowledge loop | A second session launched from the form on the same entity got the first session's shared-memory entry under "Prior sessions on this entity" |
 | 33 | `gh` setup diagnostics | Booted the daemon (a) with a logged-out `gh`: startup warns "the GitHub CLI at … is not authenticated … install the GitHub CLI from https://cli.github.com, authenticate with `gh auth login`"; (b) with no `gh` and `OPENADE_MEMORY_REPO` set: warns the repo is configured but no gh CLI was found, with the same fix — nothing fails silently |
+| 34 | Zero-config grounding | Release daemon, **no** `entity_ref` in the launch and **no** memory env vars: the session auto-grounded in the repo's GitHub `origin` remote (`entity_ref: repo:acme/checkout-service` in the response; `CLAUDE.md` carries the description + CODEOWNERS owner) |
+| 35 | Zero-config shared memory | Same run: the repo's committed `.openade/memory-repo` (`acme/team-memory`) alone routed the published artifact to the shared repo — `shared_repo`/`shared_path` in the response, session doc + `index.md` in the shim state — with no per-user configuration at all |
 
 ![Artifact banner with the shared team memory push](img/artifact-shared-memory.png)
 

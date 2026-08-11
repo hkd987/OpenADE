@@ -107,6 +107,7 @@ export function NewSessionForm({
           data-testid="ns-entity"
         />
         <span className="form-hint" data-testid="ns-entity-hint">
+          Blank = auto-detected from the repo&rsquo;s GitHub remote ·
           Backstage: <code>component:ns/name</code> · GitHub (via{" "}
           <code>gh</code>): <code>repo:owner/name</code>
         </span>

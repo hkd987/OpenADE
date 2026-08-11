@@ -31,27 +31,32 @@ telemetry, local-first.
   survive the window closing; reattach with full scrollback. Session states
   (`running` / `needs-input` / `completed` / `failed`) surface in a grid,
   including prompt detection for "the agent is waiting on you".
-- **Context-grounded sessions** — launch from a memory entity and the agent
-  starts with a budgeted context bundle (owner, dependencies, APIs, docs,
-  prior session outcomes) injected into its rules file, plus the `catalog`
-  MCP server registered for on-demand retrieval (`get_entity`, `get_owner`,
+- **Context-grounded sessions, zero config** — memory works without
+  thinking about it: launch a session with no entity named and it grounds
+  itself in the repo's own GitHub `origin` remote. The agent starts with a
+  budgeted context bundle (owner, dependencies, APIs, docs, prior session
+  outcomes) injected into its rules file, plus the `catalog` MCP server
+  registered for on-demand retrieval (`get_entity`, `get_owner`,
   `get_dependencies`, `get_apis_for_entity`, `search_catalog`,
-  `get_techdocs_page`). Two memory sources, routed by ref:
-  `component:ns/name` → Backstage; `repo:owner/name` → GitHub via your
-  local `gh` CLI (OpenADE never touches GitHub credentials).
+  `get_techdocs_page`). Naming an entity is only for overriding: two memory
+  sources, routed by ref — `component:ns/name` → Backstage;
+  `repo:owner/name` → GitHub via your local `gh` CLI (OpenADE never touches
+  GitHub credentials).
 - **Knowledge loop** — one click summarizes a session (transcript + diff)
   into a markdown artifact committed on an `openade/knowledge-*` review
   branch under `docs/`; once merged it feeds the context bundle of the next
   session on that entity.
-- **Shared team memory** — point `OPENADE_MEMORY_REPO=owner/name` at a repo
-  the whole team has write access to and every published artifact is *also*
-  pushed straight to its default branch (`sessions/<slug>.md` + a living
-  `index.md`) through your local `gh` CLI. Entries there matching a
-  session's entity flow back into the next context bundle — what any
-  teammate learned, everyone's next session knows. GitHub memory needs the
-  [GitHub CLI](https://cli.github.com) installed and authenticated
-  (`gh auth login`); the daemon tells you at startup — with the fix — if
-  `gh` is missing or logged out.
+- **Shared team memory** — commit a one-line `.openade/memory-repo` file
+  (`acme/team-memory`) naming a repo the whole team has write access to,
+  and every member's published artifacts are *also* pushed straight to its
+  default branch (`sessions/<slug>.md` + a living `index.md`) through
+  their own local `gh` CLI — configured once for the team, zero setup per
+  person (`OPENADE_MEMORY_REPO=owner/name` works too, as a daemon-wide
+  default). Entries there matching a session's entity flow back into the
+  next context bundle — what any teammate learned, everyone's next session
+  knows. GitHub memory needs the [GitHub CLI](https://cli.github.com)
+  installed and authenticated (`gh auth login`); the daemon tells you at
+  startup — with the fix — if `gh` is missing or logged out.
 - **Cross-harness handoff** — move a task Claude → Gemini (any direction) in
   place: same worktree and branch, rules re-materialized, a written handoff
   summary, and the new harness prompted to pick up where the old one left
@@ -100,18 +105,24 @@ OpenADE never touches their credentials.
 #    is installed and authenticated (gh auth login).
 export BACKSTAGE_BASE_URL=https://backstage.example.com   # optional
 export BACKSTAGE_TOKEN=...                                # optional
-export OPENADE_MEMORY_REPO=acme/team-memory               # optional: shared team memory
 openade-daemon
 
-# 2. Launch a session (or use the UI below)
+# (team, once) commit the shared memory repo into the project —
+# every member's OpenADE picks it up with zero personal setup:
+echo "acme/team-memory" > /path/to/your/repo/.openade/memory-repo
+#   (OPENADE_MEMORY_REPO=owner/name also works as a daemon-wide default)
+
+# 2. Launch a session (or use the UI below). No entity_ref needed —
+#    the session grounds itself in the repo's GitHub origin remote.
 curl -s -X POST localhost:7433/sessions -H 'content-type: application/json' -d '{
   "title": "add retries to the payments client",
   "harness": "claude-code",
   "repo_root": "/path/to/your/repo",
-  "entity_ref": "component:default/payments-api",
   "prompt": "Add retries with exponential backoff to the payments client."
 }'
-# ...or ground it in a GitHub repo instead:  "entity_ref": "repo:acme/payments"
+# Naming one overrides the auto-detection:
+#   "entity_ref": "component:default/payments-api"   (Backstage)
+#   "entity_ref": "repo:acme/payments"               (GitHub)
 
 # 3. Run the UI (dev mode; Node 20+)
 cd apps/desktop && npm install && npm run dev
@@ -126,9 +137,11 @@ Environment knobs: `OPENADE_DAEMON_PORT` (default 7433), `OPENADE_DATA_DIR`
 (default `~/.openade` — transcripts, session index, worktrees),
 `BACKSTAGE_BASE_URL` / `BACKSTAGE_TOKEN` (Backstage memory source),
 `OPENADE_GH_BIN` / `OPENADE_GITHUB_MEMORY=0` (GitHub memory source — defaults
-to the `gh` CLI on PATH), `OPENADE_MEMORY_REPO=owner/name` (shared team
-memory repo — artifacts are pushed directly to its default branch, so
-everyone on it needs write access), `VITE_OPENADE_DAEMON_URL` (UI → daemon).
+to the `gh` CLI on PATH), `OPENADE_MEMORY_REPO=owner/name` (daemon-wide
+shared team memory repo; a repository's committed `.openade/memory-repo`
+file takes precedence — artifacts are pushed directly to its default
+branch, so everyone on it needs write access),
+`VITE_OPENADE_DAEMON_URL` (UI → daemon).
 
 ## Architecture
 
@@ -178,7 +191,7 @@ everything else → Backstage) — neither backend is a hard dependency.
 ## Testing
 
 ```sh
-cargo test                                        # 157 Rust tests (real git, real PTYs, mock Backstage, fake gh, fault injection)
+cargo test                                        # 162 Rust tests (real git, real PTYs, mock Backstage, fake gh, fault injection)
 cd apps/desktop && npm test                       # UI unit tests (vitest)
 cd apps/desktop && npm run e2e                    # 11 Playwright flows: real daemon + mock Backstage + gh shim + real Chromium
 ```

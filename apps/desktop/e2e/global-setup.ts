@@ -39,6 +39,15 @@ export default function prepareWorld() {
   );
   git(repo, "add", ".");
   git(repo, "commit", "-m", "init");
+  // A GitHub origin remote: sessions launched without an entity auto-ground
+  // in repo:acme/checkout-service (served by the gh shim below).
+  git(
+    repo,
+    "remote",
+    "add",
+    "origin",
+    "https://github.com/acme/checkout-service.git",
+  );
 
   // Harness shims: enough interactivity to exercise the PTY loop.
   const bin = path.join(tmpDir, "bin");

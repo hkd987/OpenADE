@@ -178,7 +178,9 @@ async fn handoff_carries_worktree_and_context_to_the_new_harness() {
     // Entity-launched Claude session that did some work.
     let mut req = launch_req(&repo, "sleep 30");
     req.entity_ref = Some("component:default/payments-api".into());
-    let bundle = daemon.build_bundle("component:default/payments-api").await;
+    let bundle = daemon
+        .build_bundle("component:default/payments-api", None)
+        .await;
     let old = daemon.launch(req, bundle).unwrap();
     let wt = old.worktree_path.clone().unwrap();
     std::fs::write(wt.join("README.md"), "hi\nwork in progress\n").unwrap();
@@ -397,6 +399,94 @@ fn shared_memory_push_failure_degrades_to_local_only() {
     assert!(info.shared_path.is_none());
 }
 
+#[test]
+fn sessions_auto_ground_in_the_repo_origin_remote() {
+    let _guard = catalog_mcp::testutil::ENV_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    std::env::set_var("OPENADE_GH_BIN", "/custom/gh");
+    std::env::remove_var("OPENADE_GITHUB_MEMORY");
+
+    let tmp = TempDir::new().unwrap();
+    let repo = tmp.path().join("repo");
+    std::fs::create_dir(&repo).unwrap();
+    init_repo(&repo);
+    let daemon = daemon_with_catalog(&tmp);
+    let git = |args: &[&str]| {
+        let st = Command::new("git")
+            .arg("-C")
+            .arg(&repo)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(st.status.success());
+    };
+
+    // No origin remote → nothing to infer.
+    assert!(daemon.infer_entity_ref(&repo).is_none());
+
+    // GitHub origin → the repo grounds itself.
+    git(&[
+        "remote",
+        "add",
+        "origin",
+        "git@github.com:acme/payments-service.git",
+    ]);
+    assert_eq!(
+        daemon.infer_entity_ref(&repo).as_deref(),
+        Some("repo:acme/payments-service")
+    );
+
+    // Explicitly disabled GitHub memory → no inference.
+    std::env::set_var("OPENADE_GITHUB_MEMORY", "0");
+    assert!(daemon.infer_entity_ref(&repo).is_none());
+    std::env::remove_var("OPENADE_GITHUB_MEMORY");
+
+    // Non-GitHub origin → no repo: memory to offer.
+    git(&[
+        "remote",
+        "set-url",
+        "origin",
+        "https://gitlab.com/acme/x.git",
+    ]);
+    assert!(daemon.infer_entity_ref(&repo).is_none());
+
+    // Not a git repository → degrade quietly.
+    let plain_dir = tmp.path().join("not-a-repo");
+    std::fs::create_dir(&plain_dir).unwrap();
+    assert!(daemon.infer_entity_ref(&plain_dir).is_none());
+
+    // No catalog → no context to ground in.
+    let plain = Daemon::open(tmp.path().join("data2")).unwrap();
+    assert!(plain.infer_entity_ref(&repo).is_none());
+
+    std::env::remove_var("OPENADE_GH_BIN");
+}
+
+#[test]
+fn committed_memory_repo_file_configures_shared_memory_per_repo() {
+    let _guard = catalog_mcp::testutil::ENV_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let (tmp, daemon, repo) = setup();
+    // The daemon has NO daemon-wide memory repo; the repository commits its
+    // own via .openade/memory-repo, resolved through the gh on
+    // OPENADE_GH_BIN (the stateful contents shim).
+    let _shared = crate::memory_repo::tests::repo_with_shim(tmp.path());
+    std::env::set_var("OPENADE_GH_BIN", tmp.path().join("gh"));
+    std::fs::create_dir_all(repo.join(".openade")).unwrap();
+    std::fs::write(repo.join(".openade/memory-repo"), "acme/team-memory\n").unwrap();
+
+    let meta = daemon.launch(launch_req(&repo, "true"), None).unwrap();
+    wait_state(&daemon, meta.id, SessionState::Completed);
+    let info = daemon.publish_artifact(meta.id).unwrap();
+    assert_eq!(info.shared_repo.as_deref(), Some("acme/team-memory"));
+    let doc = crate::memory_repo::tests::state_file(tmp.path(), &info.shared_path.unwrap());
+    assert!(doc.contains("# Session: test task"), "{doc}");
+
+    std::env::remove_var("OPENADE_GH_BIN");
+}
+
 #[tokio::test]
 async fn shared_memory_index_entries_enrich_the_bundle() {
     let tmp = TempDir::new().unwrap();
@@ -416,7 +506,7 @@ async fn shared_memory_index_entries_enrich_the_bundle() {
     let daemon = daemon_with_catalog(&tmp).with_memory_repo(shared);
 
     let bundle = daemon
-        .build_bundle("component:default/payments-api")
+        .build_bundle("component:default/payments-api", None)
         .await
         .unwrap();
 
@@ -451,7 +541,7 @@ async fn unreadable_shared_index_still_links_the_memory_repo() {
     let daemon = daemon_with_catalog(&tmp).with_memory_repo(shared);
 
     let bundle = daemon
-        .build_bundle("component:default/payments-api")
+        .build_bundle("component:default/payments-api", None)
         .await
         .unwrap();
     assert!(bundle
@@ -483,7 +573,9 @@ async fn entity_launch_injects_context_bundle() {
 
     let mut req = launch_req(&repo, "true");
     req.entity_ref = Some("component:default/payments-api".into());
-    let bundle = daemon.build_bundle("component:default/payments-api").await;
+    let bundle = daemon
+        .build_bundle("component:default/payments-api", None)
+        .await;
     assert!(bundle.is_some());
 
     let meta = daemon.launch(req, bundle).unwrap();
@@ -526,7 +618,9 @@ async fn repo_entity_launch_injects_github_memory_context() {
 
     let mut req = launch_req(&repo, "true");
     req.entity_ref = Some("repo:acme/payments-service".into());
-    let bundle = daemon.build_bundle("repo:acme/payments-service").await;
+    let bundle = daemon
+        .build_bundle("repo:acme/payments-service", None)
+        .await;
     assert!(bundle.is_some());
 
     let meta = daemon.launch(req, bundle).unwrap();
@@ -569,7 +663,7 @@ async fn prior_session_outcomes_feed_the_next_bundle() {
 
     // The next bundle for the same entity carries that knowledge.
     let bundle = daemon
-        .build_bundle("component:default/payments-api")
+        .build_bundle("component:default/payments-api", None)
         .await
         .unwrap();
     assert_eq!(bundle.prior_sessions.len(), 1);
@@ -588,15 +682,15 @@ async fn unresolvable_entities_degrade_to_no_bundle() {
     let daemon = daemon_with_catalog(&tmp);
 
     assert!(daemon
-        .build_bundle("component:default/ghost")
+        .build_bundle("component:default/ghost", None)
         .await
         .is_none());
-    assert!(daemon.build_bundle("not-a-ref").await.is_none());
+    assert!(daemon.build_bundle("not-a-ref", None).await.is_none());
 
     // No catalog configured at all → also None, and launches still work.
     let plain = Daemon::open(tmp.path().join("data2")).unwrap();
     assert!(plain
-        .build_bundle("component:default/payments-api")
+        .build_bundle("component:default/payments-api", None)
         .await
         .is_none());
     let mut req = launch_req(&repo, "true");
@@ -717,7 +811,7 @@ async fn prior_summary_index_failure_degrades_to_no_history() {
     let daemon = daemon_with_catalog(&tmp);
     daemon.store().raw_sql("DROP TABLE sessions");
     let bundle = daemon
-        .build_bundle("component:default/payments-api")
+        .build_bundle("component:default/payments-api", None)
         .await
         .unwrap();
     assert!(bundle.prior_sessions.is_empty());
@@ -789,7 +883,9 @@ async fn existing_project_files_are_respected_at_launch() {
     let daemon = daemon_with_catalog(&tmp);
     let mut req = launch_req(&repo, "true");
     req.entity_ref = Some("component:default/payments-api".into());
-    let bundle = daemon.build_bundle("component:default/payments-api").await;
+    let bundle = daemon
+        .build_bundle("component:default/payments-api", None)
+        .await;
     let meta = daemon.launch(req, bundle).unwrap();
     let wt = meta.worktree_path.unwrap();
 
@@ -911,7 +1007,7 @@ fn colliding_worktree_files_fail_context_and_registration_writes() {
     let daemon = daemon_with_catalog(&tmp);
     let mut req = launch_req(&repo, "true");
     req.entity_ref = Some("component:default/payments-api".into());
-    let bundle = futures_block(daemon.build_bundle("component:default/payments-api"));
+    let bundle = futures_block(daemon.build_bundle("component:default/payments-api", None));
     assert!(matches!(
         daemon.launch(req, bundle),
         Err(DaemonError::Io(_))

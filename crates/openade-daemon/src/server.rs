@@ -89,10 +89,24 @@ async fn create_session(
     Json(req): Json<LaunchSessionRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
     // Entity-launched sessions get catalog context (async fetch), degrading
-    // to no bundle when the catalog can't resolve it.
+    // to no bundle when the catalog can't resolve it. With no entity named,
+    // the session grounds itself in the repo's own GitHub origin remote —
+    // memory works without the user thinking about it. The inferred entity
+    // is only adopted when it actually resolves to context.
+    let mut req = req;
     let bundle = match &req.entity_ref {
-        Some(entity_ref) => daemon.build_bundle(entity_ref).await,
-        None => None,
+        Some(entity_ref) => daemon.build_bundle(entity_ref, Some(&req.repo_root)).await,
+        None => match daemon.infer_entity_ref(&req.repo_root) {
+            Some(inferred) => {
+                let bundle = daemon.build_bundle(&inferred, Some(&req.repo_root)).await;
+                if bundle.is_some() {
+                    tracing::info!("auto-grounded session in {inferred} (repo origin remote)");
+                    req.entity_ref = Some(inferred);
+                }
+                bundle
+            }
+            None => None,
+        },
     };
     // PTY spawn + git are blocking; keep the async runtime clean.
     let meta = tokio::task::spawn_blocking(move || daemon.launch(req, bundle))

@@ -25,6 +25,10 @@ describe("NewSessionForm", () => {
     await waitFor(() =>
       expect(screen.getByTestId("ns-repo")).toHaveValue("/repos/alpha"),
     );
+    // The memory entity is optional — the hint says blank auto-grounds.
+    expect(screen.getByTestId("ns-entity-hint")).toHaveTextContent(
+      "Blank = auto-detected",
+    );
   });
 
   it("submits a launch request and reports the created session", async () => {

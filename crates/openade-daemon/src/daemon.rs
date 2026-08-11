@@ -140,8 +140,13 @@ impl Daemon {
     /// summaries of prior OpenADE sessions on the same entity. Returns `None`
     /// when no catalog is configured or the entity cannot be resolved —
     /// sessions launch without context rather than failing (degradation is
-    /// recorded in logs).
-    pub async fn build_bundle(&self, entity_ref: &str) -> Option<ContextBundle> {
+    /// recorded in logs). Pass the launching repository so its committed
+    /// `.openade/memory-repo` shared memory is folded in.
+    pub async fn build_bundle(
+        &self,
+        entity_ref: &str,
+        repo_root: Option<&std::path::Path>,
+    ) -> Option<ContextBundle> {
         let catalog = self.catalog.as_ref()?;
         let parsed: EntityRef = match entity_ref.parse() {
             Ok(r) => r,
@@ -153,7 +158,8 @@ impl Daemon {
         let prior = self.prior_session_summaries(entity_ref);
         match build_context_bundle(catalog.as_ref(), &parsed, prior).await {
             Ok(mut bundle) => {
-                self.add_shared_memory(&mut bundle, entity_ref).await;
+                self.add_shared_memory(&mut bundle, entity_ref, repo_root)
+                    .await;
                 Some(bundle)
             }
             Err(e) => {
@@ -163,13 +169,52 @@ impl Daemon {
         }
     }
 
+    /// The memory entity a session in this repository grounds in when the
+    /// user didn't name one: the repo's own GitHub `origin` remote, as a
+    /// `repo:owner/name` ref. `None` when the GitHub memory source isn't
+    /// usable, there is no catalog, or the remote isn't a GitHub URL —
+    /// callers fall back to launching without context. This is what makes
+    /// memory zero-config: sessions ground themselves.
+    pub fn infer_entity_ref(&self, repo_root: &std::path::Path) -> Option<String> {
+        self.catalog.as_ref()?;
+        // Same enablement rules as the GitHub memory source itself
+        // (OPENADE_GITHUB_MEMORY=0 disables; a gh binary must resolve).
+        catalog_mcp::github::GithubProvider::from_env().ok()?;
+        let output = std::process::Command::new("git")
+            .arg("-C")
+            .arg(repo_root)
+            .args(["remote", "get-url", "origin"])
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        let url = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        crate::memory_repo::github_entity_from_remote(&url)
+    }
+
+    /// The shared memory repo for sessions in `repo_root`: the repository's
+    /// committed `.openade/memory-repo` file wins (team-level, zero setup
+    /// for each member), falling back to the daemon-wide
+    /// `OPENADE_MEMORY_REPO` configuration.
+    fn memory_repo_for(&self, repo_root: Option<&std::path::Path>) -> Option<MemoryRepo> {
+        repo_root
+            .and_then(MemoryRepo::for_repo)
+            .or_else(|| self.memory_repo.clone())
+    }
+
     /// Fold the shared team memory repo into a bundle: recent index entries
     /// mentioning this entity become prior-session context (what teammates
     /// already learned), and the repo itself is linked as documentation.
     /// Read failures degrade silently — shared memory never blocks a launch.
-    async fn add_shared_memory(&self, bundle: &mut ContextBundle, entity_ref: &str) {
+    async fn add_shared_memory(
+        &self,
+        bundle: &mut ContextBundle,
+        entity_ref: &str,
+        repo_root: Option<&std::path::Path>,
+    ) {
         const MAX_SHARED: usize = 3;
-        let Some(memory_repo) = self.memory_repo.clone() else {
+        let Some(memory_repo) = self.memory_repo_for(repo_root) else {
             return;
         };
         bundle.docs.push(DocLink {
@@ -678,7 +723,7 @@ impl Daemon {
         // — no review gate there by design). Failure degrades to local-only.
         let mut shared_repo = None;
         let mut shared_path = None;
-        if let Some(memory_repo) = &self.memory_repo {
+        if let Some(memory_repo) = &self.memory_repo_for(Some(&meta.repo_root)) {
             let shared_file = format!("sessions/{slug}.md");
             let shared_entry = crate::artifact::IndexEntry {
                 file_name: shared_file.clone(),

@@ -234,6 +234,54 @@ async fn input_diff_files_and_projects_over_http() {
     assert_eq!(projects["projects"][0], repo.to_string_lossy().as_ref());
 }
 
+// The env mutex must stay held across the HTTP awaits — the runtime is
+// single-threaded and the env mutations span the whole test.
+#[allow(clippy::await_holding_lock)]
+#[tokio::test]
+async fn sessions_auto_ground_in_the_repo_origin_remote_over_http() {
+    let _guard = catalog_mcp::testutil::ENV_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    std::env::set_var("OPENADE_GH_BIN", "/custom/gh");
+    std::env::remove_var("OPENADE_GITHUB_MEMORY");
+
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("repo");
+    std::fs::create_dir(&repo).unwrap();
+    init_repo(&repo);
+    let add_remote = |dir: &std::path::Path, url: &str| {
+        let st = Command::new("git")
+            .args(["-C", dir.to_str().unwrap(), "remote", "add", "origin", url])
+            .output()
+            .unwrap();
+        assert!(st.status.success());
+    };
+    add_remote(&repo, "https://github.com/acme/payments-service.git");
+    let daemon = Arc::new(Daemon::open(tmp.path().join("data")).unwrap().with_catalog(
+        std::sync::Arc::new(catalog_mcp::testutil::MockProvider::with_payments_graph()),
+    ));
+    let app = router(daemon);
+
+    // Launch WITHOUT naming an entity: the session grounds itself in the
+    // repo's own GitHub origin remote.
+    let meta = create_test_session(&app, &repo, "true").await;
+    assert_eq!(meta["entity_ref"], "repo:acme/payments-service");
+    let wt = std::path::PathBuf::from(meta["worktree_path"].as_str().unwrap());
+    let rules = std::fs::read_to_string(wt.join("CLAUDE.md")).unwrap();
+    assert!(rules.contains("acme/payments-service"), "{rules}");
+
+    // An origin that doesn't resolve to any memory entity: the inferred ref
+    // is NOT adopted — the session launches plain rather than mislabeled.
+    let ghost = tmp.path().join("ghost");
+    std::fs::create_dir(&ghost).unwrap();
+    init_repo(&ghost);
+    add_remote(&ghost, "https://github.com/acme/ghost.git");
+    let meta = create_test_session(&app, &ghost, "true").await;
+    assert!(meta["entity_ref"].is_null(), "{meta}");
+
+    std::env::remove_var("OPENADE_GH_BIN");
+}
+
 #[tokio::test]
 async fn sessions_can_be_filtered_by_entity() {
     let (_tmp, app, repo) = test_world();
