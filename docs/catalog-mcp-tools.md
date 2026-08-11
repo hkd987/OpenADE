@@ -33,6 +33,11 @@ and routed by entity kind:
 | `repo:owner/name` | **GitHub**, via the user's local `gh` CLI (`src/github.rs`) | `gh auth login` — OpenADE never touches credentials (same posture as the harness CLIs) | `gh` on PATH (override binary with `OPENADE_GH_BIN`; disable with `OPENADE_GITHUB_MEMORY=0`) |
 | everything else (`component:`, `api:`, `group:`, …) | **Backstage** REST APIs (`src/backstage.rs`) | static bearer token | `BACKSTAGE_BASE_URL` (+ optional `BACKSTAGE_TOKEN`) |
 
+A missing or logged-out `gh` is diagnosed, not silently ignored: both
+binaries probe `gh auth status` at startup and every gh-backed error tells
+the user the fix — install the GitHub CLI from <https://cli.github.com>,
+run `gh auth login`, verify with `gh auth status`.
+
 GitHub mapping onto the neutral entity shape:
 
 | Tool | GitHub behavior |

@@ -154,10 +154,24 @@ fn publish_surfaces_gh_failures() {
     // Reads never fail — they degrade to None.
     assert!(repo.read_file("index.md").is_none());
 
-    // Missing binary → spawn error.
+    // Missing binary → spawn error pointing at the install docs.
     let repo = MemoryRepo::new(tmp.path().join("not-a-real-gh"), "acme/team-memory");
     let err = repo.put_file("a.md", "x", "m").unwrap_err();
     assert!(err.contains("failed to run"), "{err}");
+    assert!(err.contains("https://cli.github.com"), "{err}");
+
+    // Logged-out gh → error says how to authenticate.
+    let auth_shim = tmp.path().join("gh-logged-out");
+    fs::write(
+        &auth_shim,
+        "#!/bin/sh\necho 'To get started with GitHub CLI, please run:  gh auth login' >&2\nexit 4\n",
+    )
+    .unwrap();
+    make_executable(&auth_shim);
+    let repo = MemoryRepo::new(&auth_shim, "acme/team-memory");
+    let err = repo.put_file("a.md", "x", "m").unwrap_err();
+    assert!(err.contains("not authenticated"), "{err}");
+    assert!(err.contains("gh auth login"), "{err}");
 }
 
 #[test]
@@ -178,9 +192,18 @@ fn from_env_requires_owner_name_and_a_gh_binary() {
         assert!(MemoryRepo::from_env().is_none(), "accepted {bad:?}");
     }
 
+    // Configured repo but no gh binary anywhere (empty PATH, no override):
+    // warned about and disabled rather than silently half-working.
+    std::env::set_var(MEMORY_REPO_ENV, "acme/team-memory");
+    std::env::remove_var("OPENADE_GH_BIN");
+    let old_path = std::env::var_os("PATH");
+    std::env::set_var("PATH", "");
+    assert!(MemoryRepo::from_env().is_none());
+    if let Some(path) = old_path {
+        std::env::set_var("PATH", path);
+    }
+
     // Unset → disabled.
     std::env::remove_var(MEMORY_REPO_ENV);
     assert!(MemoryRepo::from_env().is_none());
-
-    std::env::remove_var("OPENADE_GH_BIN");
 }

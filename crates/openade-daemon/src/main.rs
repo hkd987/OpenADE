@@ -29,13 +29,24 @@ async fn main() -> anyhow::Result<()> {
     // (BACKSTAGE_BASE_URL) and/or GitHub via the user's local gh CLI.
     match catalog_mcp::MemoryRouter::from_env() {
         Some(router) => {
-            tracing::info!("memory sources: {}", router.source_names().join(", "));
+            let sources = router.source_names();
+            tracing::info!("memory sources: {}", sources.join(", "));
+            // A logged-out gh fails every GitHub memory call later — say so
+            // once at startup, with the fix.
+            if sources.contains(&"github") {
+                if let Some(gh) = catalog_mcp::github::resolve_gh_bin() {
+                    if let Some(warning) = catalog_mcp::github::gh_auth_warning(&gh) {
+                        tracing::warn!("{warning}");
+                    }
+                }
+            }
             daemon = daemon.with_catalog(Arc::new(router));
         }
         None => {
             tracing::info!(
-                "memory sources: none (set BACKSTAGE_BASE_URL and/or install the gh CLI \
-                 to enable context bundles)"
+                "memory sources: none — set BACKSTAGE_BASE_URL for Backstage, and/or {} \
+                 for GitHub memory",
+                catalog_mcp::github::GH_SETUP_HINT
             );
         }
     }

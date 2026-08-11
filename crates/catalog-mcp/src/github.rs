@@ -46,6 +46,44 @@ pub fn resolve_gh_bin() -> Option<PathBuf> {
     find_on_path("gh")
 }
 
+/// How to get a working GitHub CLI — appended to every error a user can
+/// fix by installing or authenticating `gh`.
+pub const GH_SETUP_HINT: &str = "install the GitHub CLI from https://cli.github.com, \
+     authenticate with `gh auth login`, and verify with `gh auth status`";
+
+/// Whether a `gh` stderr indicates a missing/expired login rather than a
+/// request-level failure. `gh` prints "To get started with GitHub CLI,
+/// please run:  gh auth login" when logged out and "HTTP 401" (Bad
+/// credentials) when a stored token has expired.
+fn is_auth_error(stderr: &str) -> bool {
+    stderr.contains("gh auth login") || stderr.contains("HTTP 401")
+}
+
+/// Probe `gh auth status` and return a user-facing warning when the CLI
+/// exists but cannot reach GitHub as an authenticated user. `None` means
+/// authenticated (or the probe itself succeeded). Called at daemon/MCP
+/// startup so a logged-out `gh` is reported once, up front, instead of as
+/// per-request failures.
+pub fn gh_auth_warning(gh_bin: &std::path::Path) -> Option<String> {
+    let output = std::process::Command::new(gh_bin)
+        .args(["auth", "status"])
+        .output();
+    match output {
+        Ok(out) if out.status.success() => None,
+        Ok(out) => {
+            let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+            Some(format!(
+                "the GitHub CLI at {} is not authenticated ({stderr}) — {GH_SETUP_HINT}",
+                gh_bin.display()
+            ))
+        }
+        Err(e) => Some(format!(
+            "could not run {} ({e}) — {GH_SETUP_HINT}",
+            gh_bin.display()
+        )),
+    }
+}
+
 impl GithubProvider {
     pub fn new(gh_bin: impl Into<PathBuf>) -> Self {
         GithubProvider {
@@ -60,11 +98,9 @@ impl GithubProvider {
         if std::env::var("OPENADE_GITHUB_MEMORY").as_deref() == Ok("0") {
             return Err("github memory source disabled (OPENADE_GITHUB_MEMORY=0)".into());
         }
-        resolve_gh_bin().map(GithubProvider::new).ok_or_else(|| {
-            "gh CLI not found on PATH (install GitHub CLI and run `gh auth login` \
-             to enable the GitHub memory source)"
-                .into()
-        })
+        resolve_gh_bin()
+            .map(GithubProvider::new)
+            .ok_or_else(|| format!("gh CLI not found on PATH — {GH_SETUP_HINT}"))
     }
 
     /// Run `gh` with `args`; map failures onto the provider error contract.
@@ -75,7 +111,7 @@ impl GithubProvider {
             .await
             .map_err(|e| {
                 ProviderError::Transport(format!(
-                    "failed to run {}: {e} (is the GitHub CLI installed?)",
+                    "failed to run {}: {e} — {GH_SETUP_HINT}",
                     self.gh_bin.display()
                 ))
             })?;
@@ -85,6 +121,13 @@ impl GithubProvider {
             });
         }
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        // A logged-out or token-expired gh is a setup problem the user can
+        // fix — say how, instead of surfacing a bare HTTP failure.
+        if is_auth_error(&stderr) {
+            return Err(ProviderError::Transport(format!(
+                "GitHub CLI is not authenticated ({stderr}) — {GH_SETUP_HINT}"
+            )));
+        }
         // `gh api` reports "gh: Not Found (HTTP 404)"; `gh repo view` reports
         // "Could not resolve to a Repository ...".
         if stderr.contains("HTTP 404") || stderr.contains("Could not resolve") {

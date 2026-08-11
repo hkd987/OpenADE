@@ -25,14 +25,20 @@ async fn main() -> anyhow::Result<()> {
 
     let router = MemoryRouter::from_env().ok_or_else(|| {
         anyhow::anyhow!(
-            "no memory source configured: set BACKSTAGE_BASE_URL for Backstage \
-             and/or install + authenticate the GitHub CLI (gh) for repo context"
+            "no memory source configured: set BACKSTAGE_BASE_URL for Backstage, and/or {} \
+             for GitHub repo context",
+            catalog_mcp::github::GH_SETUP_HINT
         )
     })?;
-    tracing::info!(
-        "catalog-mcp memory sources: {}",
-        router.source_names().join(", ")
-    );
+    let sources = router.source_names();
+    tracing::info!("catalog-mcp memory sources: {}", sources.join(", "));
+    if sources.contains(&"github") {
+        if let Some(gh) = catalog_mcp::github::resolve_gh_bin() {
+            if let Some(warning) = catalog_mcp::github::gh_auth_warning(&gh) {
+                tracing::warn!("{warning}");
+            }
+        }
+    }
 
     let server = McpServer::new(router);
     server

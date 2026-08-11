@@ -260,6 +260,39 @@ async fn gh_failure_modes_map_to_the_error_contract() {
     let err = provider.search("x", 3).await.unwrap_err();
     assert!(matches!(err, ProviderError::Transport(_)), "{err:?}");
 
+    // Logged-out gh → Transport carrying the setup hint (how to fix it),
+    // not a bare HTTP failure.
+    let provider = provider_with_shim(
+        tmp.path(),
+        "echo 'To get started with GitHub CLI, please run:  gh auth login' >&2; exit 4",
+    );
+    let err = provider.search("x", 3).await.unwrap_err();
+    let ProviderError::Transport(msg) = &err else {
+        panic!("{err:?}");
+    };
+    assert!(msg.contains("not authenticated"), "{msg}");
+    assert!(msg.contains("gh auth login"), "{msg}");
+    assert!(msg.contains("https://cli.github.com"), "{msg}");
+
+    // Expired token (401) gets the same treatment.
+    let provider = provider_with_shim(
+        tmp.path(),
+        "echo 'gh: Bad credentials (HTTP 401)' >&2; exit 1",
+    );
+    let err = provider.search("x", 3).await.unwrap_err();
+    let ProviderError::Transport(msg) = &err else {
+        panic!("{err:?}");
+    };
+    assert!(msg.contains("https://cli.github.com"), "{msg}");
+
+    // Missing binary error also says how to install.
+    let provider = GithubProvider::new(tmp.path().join("nope-gh"));
+    let err = provider.search("x", 3).await.unwrap_err();
+    let ProviderError::Transport(msg) = &err else {
+        panic!("{err:?}");
+    };
+    assert!(msg.contains("https://cli.github.com"), "{msg}");
+
     // Non-UTF8 stdout on success → Transport.
     let provider = provider_with_shim(tmp.path(), r"printf '\377\376'");
     let err = provider.search("x", 3).await.unwrap_err();
@@ -279,6 +312,33 @@ async fn gh_failure_modes_map_to_the_error_contract() {
     let provider = GithubProvider::new(tmp.path().join("not-a-real-gh"));
     let err = provider.search("x", 3).await.unwrap_err();
     assert!(matches!(err, ProviderError::Transport(_)), "{err:?}");
+}
+
+#[test]
+fn auth_probe_reports_logged_out_and_missing_gh() {
+    let tmp = tempfile::tempdir().unwrap();
+
+    // Authenticated: `gh auth status` exits 0 → no warning.
+    let provider = provider_with_shim(
+        tmp.path(),
+        r#"case "$*" in "auth status"*) exit 0 ;; *) exit 1 ;; esac"#,
+    );
+    assert_eq!(gh_auth_warning(&provider.gh_bin), None);
+
+    // Logged out: nonzero exit → warning with the fix.
+    let provider = provider_with_shim(
+        tmp.path(),
+        "echo 'You are not logged into any GitHub hosts.' >&2; exit 1",
+    );
+    let warning = gh_auth_warning(&provider.gh_bin).unwrap();
+    assert!(warning.contains("not authenticated"), "{warning}");
+    assert!(warning.contains("gh auth login"), "{warning}");
+    assert!(warning.contains("https://cli.github.com"), "{warning}");
+
+    // Missing binary: warning says how to install.
+    let warning = gh_auth_warning(&tmp.path().join("nope-gh")).unwrap();
+    assert!(warning.contains("could not run"), "{warning}");
+    assert!(warning.contains("https://cli.github.com"), "{warning}");
 }
 
 #[test]

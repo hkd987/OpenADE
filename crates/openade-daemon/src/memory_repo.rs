@@ -37,11 +37,22 @@ impl MemoryRepo {
 
     /// Enabled when `OPENADE_MEMORY_REPO=owner/name` is set and a `gh`
     /// binary resolves (same resolution as the GitHub memory source).
+    /// A configured-but-unusable setup is warned about, not silently
+    /// dropped — the user asked for shared memory and should hear why
+    /// they aren't getting it.
     pub fn from_env() -> Option<Self> {
-        let repo = std::env::var(MEMORY_REPO_ENV)
-            .ok()
-            .filter(|r| r.split('/').filter(|part| !part.is_empty()).count() == 2)?;
-        let gh_bin = catalog_mcp::github::resolve_gh_bin()?;
+        let repo = std::env::var(MEMORY_REPO_ENV).ok()?;
+        if repo.split('/').filter(|part| !part.is_empty()).count() != 2 {
+            tracing::warn!(
+                "ignoring {MEMORY_REPO_ENV}={repo:?}: expected owner/name (e.g. acme/team-memory)"
+            );
+            return None;
+        }
+        let Some(gh_bin) = catalog_mcp::github::resolve_gh_bin() else {
+            let hint = catalog_mcp::github::GH_SETUP_HINT;
+            tracing::warn!("{MEMORY_REPO_ENV} is set but no gh CLI was found — {hint}");
+            return None;
+        };
         Some(MemoryRepo::new(gh_bin, repo))
     }
 
@@ -56,14 +67,22 @@ impl MemoryRepo {
     }
 
     fn gh(&self, args: &[&str]) -> Result<String, String> {
+        let hint = catalog_mcp::github::GH_SETUP_HINT;
         let output = Command::new(&self.gh_bin)
             .args(args)
             .output()
-            .map_err(|e| format!("failed to run {}: {e}", self.gh_bin.display()))?;
+            .map_err(|e| format!("failed to run {}: {e} — {hint}", self.gh_bin.display()))?;
         if output.status.success() {
             String::from_utf8(output.stdout).map_err(|e| format!("non-UTF8 gh output: {e}"))
         } else {
-            Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            if stderr.contains("gh auth login") || stderr.contains("HTTP 401") {
+                Err(format!(
+                    "GitHub CLI is not authenticated ({stderr}) — {hint}"
+                ))
+            } else {
+                Err(stderr)
+            }
         }
     }
 

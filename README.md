@@ -48,7 +48,10 @@ telemetry, local-first.
   pushed straight to its default branch (`sessions/<slug>.md` + a living
   `index.md`) through your local `gh` CLI. Entries there matching a
   session's entity flow back into the next context bundle — what any
-  teammate learned, everyone's next session knows.
+  teammate learned, everyone's next session knows. GitHub memory needs the
+  [GitHub CLI](https://cli.github.com) installed and authenticated
+  (`gh auth login`); the daemon tells you at startup — with the fix — if
+  `gh` is missing or logged out.
 - **Cross-harness handoff** — move a task Claude → Gemini (any direction) in
   place: same worktree and branch, rules re-materialized, a written handoff
   summary, and the new harness prompted to pick up where the old one left
@@ -86,6 +89,12 @@ OpenADE never touches their credentials.
 ## Quickstart
 
 ```sh
+# 0. For GitHub memory (repo: entities and the shared team memory repo),
+#    install the GitHub CLI (https://cli.github.com) and authenticate:
+#      gh auth login && gh auth status
+#    OpenADE shells out to your gh — it never stores GitHub credentials.
+#    Missing or logged-out gh is reported in the daemon log with the fix.
+
 # 1. Start the daemon (localhost:7433). Memory sources are optional and
 #    combine: Backstage via env; GitHub automatically whenever the gh CLI
 #    is installed and authenticated (gh auth login).
@@ -169,7 +178,7 @@ everything else → Backstage) — neither backend is a hard dependency.
 ## Testing
 
 ```sh
-cargo test                                        # 156 Rust tests (real git, real PTYs, mock Backstage, fake gh, fault injection)
+cargo test                                        # 157 Rust tests (real git, real PTYs, mock Backstage, fake gh, fault injection)
 cd apps/desktop && npm test                       # UI unit tests (vitest)
 cd apps/desktop && npm run e2e                    # 11 Playwright flows: real daemon + mock Backstage + gh shim + real Chromium
 ```

@@ -94,6 +94,7 @@ button presses — rather than through the HTTP API:
 | 30 | Context bundle | Worktree `CLAUDE.md` carries the repo description, CODEOWNERS owner `group:acme/checkout-team`, and the "Shared team memory (acme/team-memory)" doc link |
 | 31 | Artifact button | Banner shows the review branch **and** "Also pushed to team memory acme/team-memory" with a link to the shared document (screenshot below); the shared repo state gained `sessions/…md` + updated `index.md` |
 | 32 | Team knowledge loop | A second session launched from the form on the same entity got the first session's shared-memory entry under "Prior sessions on this entity" |
+| 33 | `gh` setup diagnostics | Booted the daemon (a) with a logged-out `gh`: startup warns "the GitHub CLI at … is not authenticated … install the GitHub CLI from https://cli.github.com, authenticate with `gh auth login`"; (b) with no `gh` and `OPENADE_MEMORY_REPO` set: warns the repo is configured but no gh CLI was found, with the same fix — nothing fails silently |
 
 ![Artifact banner with the shared team memory push](img/artifact-shared-memory.png)
 
