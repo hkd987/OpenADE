@@ -57,6 +57,15 @@ telemetry, local-first.
   `AGENTS.md` / `GEMINI.md` so behavior doesn't change when you switch
   models (hand-written files are never clobbered).
 
+Launching a session grounded in a GitHub repo memory entity:
+
+![New session form with a GitHub memory entity](docs/img/new-session-form.png)
+
+Publishing its knowledge — review branch locally, pushed to the shared team
+memory repo immediately:
+
+![Knowledge artifact pushed to shared team memory](docs/img/artifact-shared-memory.png)
+
 ## Install
 
 **From a release** (Linux x86_64/aarch64, macOS Intel/Apple Silicon):

@@ -79,6 +79,24 @@ required for updates — same contract as api.github.com).
 | 26 | Knowledge loop across the team | A follow-up session on `repo:acme/checkout-service` got the shared entry under "Prior sessions on this entity" (tagged `shared-memory`) plus a "Shared team memory (acme/team-memory)" doc link in `CLAUDE.md` and `.openade/context.json` |
 | 27 | Degradation | With the `gh` binary removed, publication still succeeds locally (review branch) and the response has no `shared_*` fields — covered by unit tests and re-checked by hand |
 
+## GitHub memory through the app, by hand (verified)
+
+Run on 2026-08-11 driving the real UI in Chromium (Vite + daemon +
+`gh`/harness shims) click-for-click as a user — form fill, terminal typing,
+button presses — rather than through the HTTP API:
+
+![New session form with a repo memory entity](img/new-session-form.png)
+
+| # | Step | Result |
+|---|---|---|
+| 28 | Launch form, entity `repo:acme/checkout-service` | Dual-source hint under the field; session launches from the form; card shows the green `repo` chip |
+| 29 | Terminal | Attaches live, shows the harness banner + passed-through prompt; typing `exit` into the terminal ends the session → card flips to `completed` |
+| 30 | Context bundle | Worktree `CLAUDE.md` carries the repo description, CODEOWNERS owner `group:acme/checkout-team`, and the "Shared team memory (acme/team-memory)" doc link |
+| 31 | Artifact button | Banner shows the review branch **and** "Also pushed to team memory acme/team-memory" with a link to the shared document (screenshot below); the shared repo state gained `sessions/…md` + updated `index.md` |
+| 32 | Team knowledge loop | A second session launched from the form on the same entity got the first session's shared-memory entry under "Prior sessions on this entity" |
+
+![Artifact banner with the shared team memory push](img/artifact-shared-memory.png)
+
 ## Not verifiable in this environment
 
 - The real `claude` / `codex` / `gemini` CLIs (no vendor credentials in the
