@@ -284,3 +284,344 @@ async fn database_faults_become_500s_not_panics() {
         .unwrap()
         .contains("workspaces"));
 }
+
+fn signal_body(title: &str, affected: i64) -> serde_json::Value {
+    serde_json::json!({
+        "source": "sentry",
+        "kind": "exception",
+        "severity": "critical",
+        "title": title,
+        "body": "stack trace body",
+        "evidence": [{ "kind": "stack_trace", "label": "trace", "url": "https://s.example/1" }],
+        "affected_count": affected,
+    })
+}
+
+#[tokio::test]
+async fn signals_flow_through_the_inbox_over_http() {
+    let (_tmp, app) = app();
+    let minted = app
+        .clone()
+        .oneshot(request(
+            "POST",
+            "/tokens",
+            Some("admin-secret"),
+            Some(serde_json::json!({ "name": "casey" })),
+        ))
+        .await
+        .unwrap();
+    let member = json(minted).await["token"].as_str().unwrap().to_string();
+
+    // Auth required; single-object and array bodies both work.
+    let res = app
+        .clone()
+        .oneshot(request(
+            "POST",
+            "/signals",
+            None,
+            Some(signal_body("NPE", 5)),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+    let res = app
+        .clone()
+        .oneshot(request(
+            "POST",
+            "/signals",
+            Some(&member),
+            Some(signal_body("NPE", 5)),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let body = json(res).await;
+    assert_eq!(body["received"], 1);
+    assert_eq!(body["inserted"], 1);
+    let res = app
+        .clone()
+        .oneshot(request(
+            "POST",
+            "/signals",
+            Some(&member),
+            Some(serde_json::json!([
+                signal_body("NPE", 8),
+                signal_body("timeout", 1)
+            ])),
+        ))
+        .await
+        .unwrap();
+    let body = json(res).await;
+    assert_eq!(body["received"], 2);
+    assert_eq!(body["inserted"], 1);
+    assert_eq!(body["updated"], 1);
+
+    // Validation is a 400 with the reason; unknown fields are rejected.
+    for bad in [
+        serde_json::json!({ "source": " ", "kind": "exception", "severity": "low", "title": "x" }),
+        serde_json::json!({ "source": "s", "kind": "exception", "severity": "low", "title": " " }),
+    ] {
+        let res = app
+            .clone()
+            .oneshot(request("POST", "/signals", Some(&member), Some(bad)))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    }
+    let mut invented = signal_body("x", 1);
+    invented["made_up"] = serde_json::json!(true);
+    let res = app
+        .clone()
+        .oneshot(request("POST", "/signals", Some(&member), Some(invented)))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+    // Inbox lists newest activity first with the affected rollup.
+    let res = app
+        .clone()
+        .oneshot(request("GET", "/inbox?status=new", Some(&member), None))
+        .await
+        .unwrap();
+    let items = json(res).await["items"].clone();
+    assert_eq!(items.as_array().unwrap().len(), 2);
+    let npe_id = items
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i["title"] == "NPE")
+        .unwrap()["id"]
+        .as_i64()
+        .unwrap();
+
+    // Detail carries signals + evidence; accept stamps the token's name.
+    let res = app
+        .clone()
+        .oneshot(request(
+            "GET",
+            &format!("/inbox/{npe_id}"),
+            Some(&member),
+            None,
+        ))
+        .await
+        .unwrap();
+    let detail = json(res).await;
+    assert_eq!(detail["item"]["affected_count"], 8);
+    assert_eq!(detail["signals"][0]["evidence"][0]["label"], "trace");
+    let res = app
+        .clone()
+        .oneshot(request(
+            "POST",
+            &format!("/inbox/{npe_id}/accept"),
+            Some(&member),
+            Some(serde_json::json!({})),
+        ))
+        .await
+        .unwrap();
+    let item = json(res).await;
+    assert_eq!(item["status"], "accepted");
+    assert_eq!(item["decided_by"], "casey");
+    // Second accept is a 409 (teammate already took it).
+    let res = app
+        .clone()
+        .oneshot(request(
+            "POST",
+            &format!("/inbox/{npe_id}/accept"),
+            Some(&member),
+            Some(serde_json::json!({})),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+
+    // Outcome recording: 201 then 200 (idempotent).
+    let res = app
+        .clone()
+        .oneshot(request(
+            "POST",
+            &format!("/inbox/{npe_id}/outcomes"),
+            Some(&member),
+            Some(serde_json::json!({ "kind": "merged", "pr_url": "https://gh/pr/9" })),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::CREATED);
+    let res = app
+        .clone()
+        .oneshot(request(
+            "POST",
+            &format!("/inbox/{npe_id}/outcomes"),
+            Some(&member),
+            Some(serde_json::json!({ "kind": "merged" })),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    // Missing item is a 404.
+    let res = app
+        .clone()
+        .oneshot(request("GET", "/inbox/999", Some(&member), None))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn dismissal_escalation_and_verdicts_over_http() {
+    let (_tmp, app) = app();
+    let minted = app
+        .clone()
+        .oneshot(request(
+            "POST",
+            "/tokens",
+            Some("admin-secret"),
+            Some(serde_json::json!({ "name": "sam" })),
+        ))
+        .await
+        .unwrap();
+    let member = json(minted).await["token"].as_str().unwrap().to_string();
+
+    let res = app
+        .clone()
+        .oneshot(request(
+            "POST",
+            "/signals",
+            Some(&member),
+            Some(signal_body("rage", 10)),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let id = json(
+        app.clone()
+            .oneshot(request("GET", "/inbox", Some(&member), None))
+            .await
+            .unwrap(),
+    )
+    .await["items"][0]["id"]
+        .as_i64()
+        .unwrap();
+
+    // Bad reason → 400 naming the taxonomy; good reason dismisses.
+    let res = app
+        .clone()
+        .oneshot(request(
+            "POST",
+            &format!("/inbox/{id}/dismiss"),
+            Some(&member),
+            Some(serde_json::json!({ "reason": "meh" })),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    assert!(json(res).await["error"]
+        .as_str()
+        .unwrap()
+        .contains("intended_behavior"));
+    let res = app
+        .clone()
+        .oneshot(request(
+            "POST",
+            &format!("/inbox/{id}/dismiss"),
+            Some(&member),
+            Some(serde_json::json!({ "reason": "intended_behavior" })),
+        ))
+        .await
+        .unwrap();
+    let item = json(res).await;
+    assert_eq!(item["status"], "dismissed");
+    assert_eq!(item["decided_by"], "sam");
+
+    // A 3× recurrence escalates it back into the queue.
+    let res = app
+        .clone()
+        .oneshot(request(
+            "POST",
+            "/signals",
+            Some(&member),
+            Some(signal_body("rage", 30)),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(json(res).await["escalated"], 1);
+    let detail = json(
+        app.clone()
+            .oneshot(request("GET", &format!("/inbox/{id}"), Some(&member), None))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(detail["item"]["status"], "new");
+    // The dismissal remains in outcome memory even after the reopen.
+    assert_eq!(detail["outcomes"][0]["kind"], "dismissed");
+
+    // Shared-session verdicts round-trip over HTTP.
+    let ws = json(
+        app.clone()
+            .oneshot(request(
+                "POST",
+                "/workspaces",
+                Some(&member),
+                Some(serde_json::json!({ "title": "W", "description": "" })),
+            ))
+            .await
+            .unwrap(),
+    )
+    .await["id"]
+        .as_i64()
+        .unwrap();
+    let sid = json(
+        app.clone()
+            .oneshot(request(
+                "POST",
+                &format!("/workspaces/{ws}/sessions"),
+                Some(&member),
+                Some(serde_json::json!({
+                    "title": "t", "harness": "claude-code", "summary": "s",
+                    "markdown": "# t", "events": [],
+                })),
+            ))
+            .await
+            .unwrap(),
+    )
+    .await["id"]
+        .as_i64()
+        .unwrap();
+    let res = app
+        .clone()
+        .oneshot(request(
+            "POST",
+            &format!("/workspaces/{ws}/sessions/{sid}/verdict"),
+            Some(&member),
+            Some(serde_json::json!({ "verdict": "merged" })),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let listed = json(
+        app.clone()
+            .oneshot(request(
+                "GET",
+                &format!("/workspaces/{ws}/sessions"),
+                Some(&member),
+                None,
+            ))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(listed["sessions"][0]["verdict"], "merged");
+    // Unknown session → 404.
+    let res = app
+        .clone()
+        .oneshot(request(
+            "POST",
+            &format!("/workspaces/{ws}/sessions/999/verdict"),
+            Some(&member),
+            Some(serde_json::json!({ "verdict": "merged" })),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+}

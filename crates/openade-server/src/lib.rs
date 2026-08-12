@@ -9,4 +9,5 @@
 //! binary.
 
 pub mod server;
+pub mod signal;
 pub mod store;
