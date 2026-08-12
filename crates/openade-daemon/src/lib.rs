@@ -9,6 +9,7 @@ pub mod adapters;
 pub mod artifact;
 pub mod config;
 pub mod daemon;
+pub mod inbox;
 pub mod memory_repo;
 pub mod pty;
 pub mod server;

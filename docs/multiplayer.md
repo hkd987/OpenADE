@@ -115,10 +115,19 @@ tokens.
 | `POST /workspaces/{id}/sessions` | member | Upload a session record (`title`, `harness`, `entity_ref?`, `branch?`, `summary`, `markdown`, `events`) |
 | `GET /workspaces/{id}/sessions[?entity=ref]` | member | Shared sessions, newest first, optionally entity-filtered |
 | `GET /workspaces/{id}/sessions/{sid}` | member | Full record (meta + markdown + events) |
+| `POST /workspaces/{id}/sessions/{sid}/verdict` | member | Record what reality decided (`merged`/`closed`/`reverted`) |
+| `POST /signals` | member | Ingest normalized signals into the team inbox ([schema](signals.md)) |
+| `GET /inbox[?status=]` / `GET /inbox/{id}` | member | The team triage queue / one item with outcome history |
+| `POST /inbox/{id}/accept` / `.../dismiss` / `.../outcomes` | member | Triage actions; the actor is derived from the token |
 
 Every row is org-scoped internally (self-host runs a single default org),
 so the same binary can serve a future multi-tenant hosted deployment
 without a schema change.
+
+The server also hosts the team **Inbox** — signals, triage state, and
+outcome memory — documented in [signals.md](signals.md). Members never
+log into the server for any of it: their daemons proxy every call with
+the stored member token.
 
 ## Scope (v1)
 

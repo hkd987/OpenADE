@@ -15,7 +15,7 @@ use axum::{Json, Router};
 use serde::Deserialize;
 use uuid::Uuid;
 
-use crate::daemon::{Daemon, DaemonError, LaunchSessionRequest, PickupRequest};
+use crate::daemon::{Daemon, DaemonError, FromInboxRequest, LaunchSessionRequest, PickupRequest};
 
 /// Build the API router around a daemon.
 pub fn router(daemon: Arc<Daemon>) -> Router {
@@ -35,6 +35,13 @@ pub fn router(daemon: Arc<Daemon>) -> Router {
         .route("/sessions/pickup", post(post_pickup))
         .route("/workspace/sessions", get(workspace_sessions))
         .route("/workspace/sessions/{sid}", get(workspace_session))
+        .route("/signals", post(post_signals))
+        .route("/inbox", get(list_inbox))
+        .route("/inbox/{iid}", get(get_inbox_item))
+        .route("/inbox/{iid}/accept", post(accept_inbox_item))
+        .route("/inbox/{iid}/dismiss", post(dismiss_inbox_item))
+        .route("/sessions/from-inbox", post(post_from_inbox))
+        .route("/sessions/{id}/inbox-outcome", post(post_inbox_outcome))
         .route("/sessions/{id}/artifact", post(post_artifact))
         .route("/sessions/{id}/handoff", post(post_handoff))
         .route("/projects", get(list_projects))
@@ -95,6 +102,7 @@ fn config_status(daemon: &Daemon) -> serde_json::Value {
             || std::env::var(crate::workspace::SERVER_TOKEN_ENV).is_ok_and(|v| !v.is_empty()),
         "server_workspace": settings.server_workspace,
         "workspace_configured": settings.effective_workspace().is_some(),
+        "inbox_backend": daemon.inbox_backend().name(),
     })
 }
 
@@ -203,6 +211,116 @@ async fn workspace_session(
         "markdown": detail.markdown,
         "events": detail.events,
     })))
+}
+
+/// Signal errors keep the workspace-client error contract: bad input is a
+/// 400, everything else (unreachable server, rejected token) a 502-style
+/// gateway error the UI can show verbatim.
+fn inbox_err(e: String) -> ApiError {
+    if e == "not found" {
+        ApiError(StatusCode::NOT_FOUND, e)
+    } else if e.contains("must be") || e.contains("bad signal") || e.contains("reason must") {
+        ApiError(StatusCode::BAD_REQUEST, e)
+    } else if e.contains("already decided") {
+        ApiError(StatusCode::CONFLICT, e)
+    } else {
+        ApiError(StatusCode::BAD_GATEWAY, e)
+    }
+}
+
+/// Ingest signals into the active inbox (team server when configured,
+/// the embedded local inbox otherwise) — one surface either way, and the
+/// member token never reaches the browser.
+async fn post_signals(
+    State(daemon): State<Arc<Daemon>>,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let result = daemon
+        .inbox_backend()
+        .post_signals(body)
+        .await
+        .map_err(inbox_err)?;
+    Ok(Json(result))
+}
+
+#[derive(Deserialize)]
+struct InboxListQuery {
+    status: Option<String>,
+}
+
+async fn list_inbox(
+    State(daemon): State<Arc<Daemon>>,
+    Query(q): Query<InboxListQuery>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let result = daemon
+        .inbox_backend()
+        .inbox(q.status)
+        .await
+        .map_err(inbox_err)?;
+    Ok(Json(result))
+}
+
+async fn get_inbox_item(
+    State(daemon): State<Arc<Daemon>>,
+    Path(iid): Path<i64>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let result = daemon
+        .inbox_backend()
+        .inbox_item(iid)
+        .await
+        .map_err(inbox_err)?;
+    Ok(Json(result))
+}
+
+async fn accept_inbox_item(
+    State(daemon): State<Arc<Daemon>>,
+    Path(iid): Path<i64>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let result = daemon
+        .inbox_backend()
+        .accept(iid)
+        .await
+        .map_err(inbox_err)?;
+    Ok(Json(result))
+}
+
+#[derive(Deserialize)]
+struct DismissBody {
+    reason: String,
+}
+
+async fn dismiss_inbox_item(
+    State(daemon): State<Arc<Daemon>>,
+    Path(iid): Path<i64>,
+    Json(body): Json<DismissBody>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let result = daemon
+        .inbox_backend()
+        .dismiss(iid, body.reason)
+        .await
+        .map_err(inbox_err)?;
+    Ok(Json(result))
+}
+
+/// Start a triage session from an inbox item.
+async fn post_from_inbox(
+    State(daemon): State<Arc<Daemon>>,
+    Json(req): Json<FromInboxRequest>,
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    let meta = daemon.start_from_inbox(req).await?;
+    Ok((
+        StatusCode::CREATED,
+        Json(serde_json::to_value(meta).unwrap()),
+    ))
+}
+
+/// Record the session branch's PR fate into outcome memory (idempotent).
+async fn post_inbox_outcome(
+    State(daemon): State<Arc<Daemon>>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let result = daemon.record_inbox_outcome(id).await?;
+    Ok(Json(result))
 }
 
 #[derive(Deserialize)]

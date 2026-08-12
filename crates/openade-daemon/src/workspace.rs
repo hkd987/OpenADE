@@ -31,6 +31,9 @@ pub struct WorkspaceSession {
     pub summary: String,
     pub shared_by: String,
     pub uploaded_at: String,
+    /// What reality decided about this session's work, once known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verdict: Option<String>,
 }
 
 /// Full detail of a shared session (harness-neutral record).
@@ -133,6 +136,103 @@ impl WorkspaceClient {
             .json()
             .await
             .map_err(|e| format!("bad response from workspace server: {e}"))
+    }
+
+    async fn get_json(&self, path: &str) -> Result<serde_json::Value, String> {
+        let res = self
+            .client()
+            .get(self.url(path))
+            .bearer_auth(&self.token)
+            .send()
+            .await
+            .map_err(|e| format!("workspace server unreachable: {e}"))?;
+        Self::check(res)
+            .await?
+            .json()
+            .await
+            .map_err(|e| format!("bad response from workspace server: {e}"))
+    }
+
+    async fn post_json(
+        &self,
+        path: &str,
+        body: &serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
+        let res = self
+            .client()
+            .post(self.url(path))
+            .bearer_auth(&self.token)
+            .json(body)
+            .send()
+            .await
+            .map_err(|e| format!("workspace server unreachable: {e}"))?;
+        Self::check(res)
+            .await?
+            .json()
+            .await
+            .map_err(|e| format!("bad response from workspace server: {e}"))
+    }
+
+    /// Push normalized signals into the team inbox.
+    pub async fn post_signals(
+        &self,
+        body: &serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
+        self.post_json("/signals", body).await
+    }
+
+    /// The team inbox, optionally status-filtered.
+    pub async fn inbox(&self, status: Option<&str>) -> Result<serde_json::Value, String> {
+        let query = status.map(|s| format!("?status={s}")).unwrap_or_default();
+        self.get_json(&format!("/inbox{query}")).await
+    }
+
+    /// One inbox item with signals + outcome history.
+    pub async fn inbox_item(&self, id: i64) -> Result<serde_json::Value, String> {
+        self.get_json(&format!("/inbox/{id}")).await
+    }
+
+    /// Take an item (the server stamps who, from this client's token).
+    pub async fn accept_item(&self, id: i64) -> Result<serde_json::Value, String> {
+        self.post_json(&format!("/inbox/{id}/accept"), &serde_json::json!({}))
+            .await
+    }
+
+    /// Dismiss an item with a structured reason.
+    pub async fn dismiss_item(&self, id: i64, reason: &str) -> Result<serde_json::Value, String> {
+        self.post_json(
+            &format!("/inbox/{id}/dismiss"),
+            &serde_json::json!({ "reason": reason }),
+        )
+        .await
+    }
+
+    /// Record what reality decided about an item's work (idempotent).
+    pub async fn record_outcome(
+        &self,
+        id: i64,
+        kind: &str,
+        pr_url: Option<&str>,
+        note: Option<&str>,
+    ) -> Result<serde_json::Value, String> {
+        self.post_json(
+            &format!("/inbox/{id}/outcomes"),
+            &serde_json::json!({ "kind": kind, "pr_url": pr_url, "note": note }),
+        )
+        .await
+    }
+
+    /// Record a verdict on a shared session.
+    pub async fn set_verdict(&self, session_id: i64, verdict: &str) -> Result<(), String> {
+        self.post_json(
+            &format!(
+                "/workspaces/{}/sessions/{session_id}/verdict",
+                self.workspace_id
+            ),
+            &serde_json::json!({ "verdict": verdict }),
+        )
+        .await
+        .map(|_| ())
     }
 }
 

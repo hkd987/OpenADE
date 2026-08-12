@@ -6,7 +6,8 @@ import { SessionDetail } from "./SessionDetail";
 
 const { getDiff, getFiles,
   getFileContent,
-  getSkills, handoffSession, killSession, publishArtifact, shareSession } =
+  getSkills, handoffSession, killSession, publishArtifact, shareSession,
+  recordInboxOutcome } =
   vi.hoisted(() => ({
     getDiff: vi.fn(),
     getFiles: vi.fn(),
@@ -16,6 +17,7 @@ const { getDiff, getFiles,
     killSession: vi.fn(),
     publishArtifact: vi.fn(),
     shareSession: vi.fn(),
+    recordInboxOutcome: vi.fn(),
   }));
 
 vi.mock("../api", async (importOriginal) => ({
@@ -28,6 +30,7 @@ vi.mock("../api", async (importOriginal) => ({
   killSession,
   publishArtifact,
   shareSession,
+  recordInboxOutcome,
 }));
 
 vi.mock("./TerminalView", () => ({
@@ -159,6 +162,54 @@ describe("SessionDetail", () => {
     await userEvent.click(screen.getByTestId("share-button"));
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "rejected the token",
+    );
+  });
+
+  it("triage sessions record their outcome automatically on completion", async () => {
+    recordInboxOutcome.mockResolvedValue({ recorded: true, kind: "merged" });
+    const triage: SessionMeta = {
+      ...session,
+      inbox_item_id: 7,
+      state: "completed",
+    };
+    render(<SessionDetail session={triage} onChanged={vi.fn()} />);
+    const banner = await screen.findByTestId("outcome-banner");
+    expect(banner).toHaveTextContent("outcome recorded: merged");
+    // One automatic attempt per session — idempotent by design.
+    expect(recordInboxOutcome).toHaveBeenCalledTimes(1);
+
+    // The manual button re-checks on demand (e.g. after the PR merges).
+    recordInboxOutcome.mockResolvedValue({
+      recorded: false,
+      note: "no decided PR for the session branch yet",
+    });
+    await userEvent.click(screen.getByTestId("outcome-button"));
+    expect(await screen.findByTestId("outcome-banner")).toHaveTextContent(
+      "no decided PR",
+    );
+  });
+
+  it("running or plain sessions do not auto-record outcomes", async () => {
+    const triage: SessionMeta = { ...session, inbox_item_id: 7 };
+    const { rerender } = render(
+      <SessionDetail session={triage} onChanged={vi.fn()} />,
+    );
+    expect(recordInboxOutcome).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("outcome-button")).toBeInTheDocument();
+
+    // A session with no inbox link shows no outcome affordances at all,
+    // and auto-record failures surface in the banner.
+    rerender(<SessionDetail session={session} onChanged={vi.fn()} />);
+    expect(screen.queryByTestId("outcome-button")).toBeNull();
+    recordInboxOutcome.mockRejectedValue(new Error("gh exploded"));
+    rerender(
+      <SessionDetail
+        session={{ ...session, id: "s-2", inbox_item_id: 7, state: "failed" }}
+        onChanged={vi.fn()}
+      />,
+    );
+    expect(await screen.findByTestId("outcome-banner")).toHaveTextContent(
+      "gh exploded",
     );
   });
 

@@ -13,6 +13,7 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::Deserialize;
 
+use crate::signal::{DismissReason, SignalIn};
 use crate::store::{Store, StoreError, DEFAULT_ORG};
 
 /// Shared application state.
@@ -39,6 +40,7 @@ impl From<StoreError> for ApiError {
     fn from(err: StoreError) -> Self {
         match err {
             StoreError::NotFound => ApiError(StatusCode::NOT_FOUND, "not found".into()),
+            StoreError::Conflict(msg) => ApiError(StatusCode::CONFLICT, msg),
             StoreError::Db(e) => ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
         }
     }
@@ -99,8 +101,184 @@ pub fn router(state: Arc<AppState>) -> Router {
             get(list_sessions).post(upload_session),
         )
         .route("/workspaces/{id}/sessions/{sid}", get(get_session))
+        .route(
+            "/workspaces/{id}/sessions/{sid}/verdict",
+            post(set_session_verdict),
+        )
+        .route("/signals", post(ingest_signals))
+        .route("/inbox", get(list_inbox))
+        .route("/inbox/{id}", get(get_inbox_item))
+        .route("/inbox/{id}/accept", post(accept_inbox_item))
+        .route("/inbox/{id}/dismiss", post(dismiss_inbox_item))
+        .route("/inbox/{id}/outcomes", post(record_inbox_outcome))
         .layer(tower_http::cors::CorsLayer::permissive())
         .with_state(state)
+}
+
+/// One signal or a batch — both are valid `POST /signals` bodies.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum OneOrMany {
+    One(Box<SignalIn>),
+    Many(Vec<SignalIn>),
+}
+
+/// Ingest normalized signals (the generic webhook). Dedup is by
+/// fingerprint; recurrences update rather than duplicate, and may
+/// escalate a dismissed item back into the queue.
+async fn ingest_signals(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(body): Json<OneOrMany>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let (org, _) = member(&state, &headers)?;
+    let signals = match body {
+        OneOrMany::One(s) => vec![*s],
+        OneOrMany::Many(v) => v,
+    };
+    let (mut inserted, mut updated, mut escalated) = (0, 0, 0);
+    for sig in &signals {
+        if sig.source.trim().is_empty() {
+            return Err(ApiError(
+                StatusCode::BAD_REQUEST,
+                "source must be non-empty".into(),
+            ));
+        }
+        if sig.title.trim().is_empty() {
+            return Err(ApiError(
+                StatusCode::BAD_REQUEST,
+                "title must be non-empty".into(),
+            ));
+        }
+        let outcome = state.store.ingest_signal(org, sig)?;
+        if outcome.inserted {
+            inserted += 1;
+        } else {
+            updated += 1;
+        }
+        if outcome.escalated {
+            escalated += 1;
+        }
+    }
+    Ok(Json(serde_json::json!({
+        "received": signals.len(),
+        "inserted": inserted,
+        "updated": updated,
+        "escalated": escalated,
+    })))
+}
+
+#[derive(Deserialize)]
+struct InboxQuery {
+    status: Option<String>,
+}
+
+async fn list_inbox(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Query(q): Query<InboxQuery>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let (org, _) = member(&state, &headers)?;
+    let items = state.store.inbox(org, q.status.as_deref())?;
+    Ok(Json(serde_json::json!({ "items": items })))
+}
+
+async fn get_inbox_item(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(id): Path<i64>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let (org, _) = member(&state, &headers)?;
+    let detail = state.store.inbox_item(org, id)?;
+    Ok(Json(
+        serde_json::to_value(detail).expect("detail serializes"),
+    ))
+}
+
+/// Accept an item: the actor is the authenticated member (never
+/// client-supplied), so every teammate's inbox shows who took the work.
+async fn accept_inbox_item(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(id): Path<i64>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let (org, name) = member(&state, &headers)?;
+    let item = state.store.accept_item(org, id, &name)?;
+    Ok(Json(serde_json::to_value(item).expect("item serializes")))
+}
+
+#[derive(Deserialize)]
+struct DismissBody {
+    reason: String,
+}
+
+async fn dismiss_inbox_item(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(id): Path<i64>,
+    Json(body): Json<DismissBody>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let (org, name) = member(&state, &headers)?;
+    let reason: DismissReason = serde_json::from_value(serde_json::Value::String(body.reason))
+        .map_err(|_| {
+            ApiError(
+                StatusCode::BAD_REQUEST,
+                "reason must be one of intended_behavior|wont_fix|duplicate|bad_evidence".into(),
+            )
+        })?;
+    let item = state.store.dismiss_item(org, id, reason, &name)?;
+    Ok(Json(serde_json::to_value(item).expect("item serializes")))
+}
+
+#[derive(Deserialize)]
+struct OutcomeBody {
+    kind: String,
+    #[serde(default)]
+    pr_url: Option<String>,
+    #[serde(default)]
+    note: Option<String>,
+}
+
+async fn record_inbox_outcome(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(id): Path<i64>,
+    Json(body): Json<OutcomeBody>,
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    let (org, _) = member(&state, &headers)?;
+    let inserted = state.store.record_outcome(
+        org,
+        id,
+        &body.kind,
+        body.pr_url.as_deref(),
+        body.note.as_deref(),
+    )?;
+    Ok((
+        if inserted {
+            StatusCode::CREATED
+        } else {
+            StatusCode::OK
+        },
+        Json(serde_json::json!({ "recorded": inserted })),
+    ))
+}
+
+#[derive(Deserialize)]
+struct VerdictBody {
+    verdict: String,
+}
+
+/// Record what reality decided about a shared session (merged / closed /
+/// reverted) — every member's context bundles pick it up.
+async fn set_session_verdict(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path((_ws, sid)): Path<(i64, i64)>,
+    Json(body): Json<VerdictBody>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let (org, _) = member(&state, &headers)?;
+    state.store.set_session_verdict(org, sid, &body.verdict)?;
+    Ok(Json(serde_json::json!({ "verdict": body.verdict })))
 }
 
 async fn health() -> Json<serde_json::Value> {

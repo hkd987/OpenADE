@@ -1519,3 +1519,367 @@ async fn share_and_pickup_round_trip_through_a_real_workspace_server() {
         .unwrap_err();
     assert!(matches!(err, DaemonError::Workspace(_)));
 }
+
+fn gh_pr_view_shim(dir: &std::path::Path, state: &str) -> PathBuf {
+    let shim = dir.join("gh");
+    std::fs::write(
+        &shim,
+        format!(
+            "#!/bin/sh\ncase \"$*\" in\n  \"pr view\"*) printf '{{\"state\":\"{state}\",\"url\":\"https://gh/pr/42\"}}' ;;\n  \"auth status\"*) exit 0 ;;\n  *) echo 'gh: Not Found (HTTP 404)' >&2; exit 1 ;;\nesac\n"
+        ),
+    )
+    .unwrap();
+    crate::memory_repo::tests::make_executable(&shim);
+    shim
+}
+
+fn inbox_signal(title: &str) -> serde_json::Value {
+    serde_json::json!({
+        "source": "sentry",
+        "kind": "exception",
+        "severity": "critical",
+        "title": title,
+        "body": "TypeError: cannot read x of undefined",
+        "evidence": [{ "kind": "stack_trace", "label": "sentry trace",
+                       "url": "https://sentry.example/e/9" }],
+        "join_keys": { "release": "v2.3.0" },
+        "affected_count": 12,
+    })
+}
+
+/// Holding the env lock across awaits is fine in tests: the lock is what
+/// keeps env-mutating tests from interleaving.
+#[allow(clippy::await_holding_lock)]
+#[tokio::test]
+async fn triage_sessions_carry_evidence_and_record_outcomes_locally() {
+    let _guard = catalog_mcp::testutil::ENV_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    for var in [
+        crate::workspace::SERVER_URL_ENV,
+        crate::workspace::SERVER_TOKEN_ENV,
+        crate::workspace::SERVER_WORKSPACE_ENV,
+    ] {
+        std::env::remove_var(var);
+    }
+    let tmp = TempDir::new().unwrap();
+    let repo = tmp.path().join("repo");
+    std::fs::create_dir(&repo).unwrap();
+    init_repo(&repo);
+    let daemon = Daemon::open(tmp.path().join("data")).unwrap();
+
+    // No server configured → the embedded local inbox is active.
+    let backend = daemon.inbox_backend();
+    assert_eq!(backend.name(), "local");
+    backend
+        .post_signals(inbox_signal("NPE in checkout"))
+        .await
+        .unwrap();
+    let item_id = backend.inbox(None).await.unwrap()["items"][0]["id"]
+        .as_i64()
+        .unwrap();
+    // A prior attempt exists in outcome memory before this triage.
+    backend
+        .record_outcome(
+            item_id,
+            "closed".into(),
+            Some("https://gh/pr/7".into()),
+            None,
+        )
+        .await
+        .unwrap();
+
+    // Investigate first: session launches, item stays undecided.
+    let peek = daemon
+        .start_from_inbox(FromInboxRequest {
+            item_id,
+            harness: Harness::GeminiCli,
+            repo_root: repo.clone(),
+            checkout: CheckoutMode::default(),
+            investigate: true,
+            command_override: Some(sh("true")),
+        })
+        .await
+        .unwrap();
+    assert_eq!(peek.inbox_item_id, Some(item_id));
+    assert_eq!(
+        backend.inbox_item(item_id).await.unwrap()["item"]["status"],
+        "new"
+    );
+
+    // Accept & start: the triage doc carries evidence, join keys, and the
+    // age-annotated outcome history; the item is taken.
+    let meta = daemon
+        .start_from_inbox(FromInboxRequest {
+            item_id,
+            harness: Harness::ClaudeCode,
+            repo_root: repo.clone(),
+            checkout: CheckoutMode::default(),
+            investigate: false,
+            command_override: Some(sh("true")),
+        })
+        .await
+        .unwrap();
+    assert!(meta.title.starts_with("triage: "));
+    let doc = std::fs::read_to_string(
+        meta.worktree_path
+            .clone()
+            .unwrap()
+            .join(".openade/inbox-item.md"),
+    )
+    .unwrap();
+    assert!(doc.contains("Severity **critical**"), "{doc}");
+    assert!(doc.contains("https://sentry.example/e/9"), "{doc}");
+    assert!(doc.contains("v2.3.0"), "{doc}");
+    assert!(doc.contains("Prior outcomes on this fingerprint"), "{doc}");
+    assert!(doc.contains("\"closed\""), "{doc}");
+    assert!(doc.contains("days ago"), "{doc}");
+    let item = backend.inbox_item(item_id).await.unwrap();
+    assert_eq!(item["item"]["status"], "accepted");
+    let events = daemon.store().read_transcript(meta.id).unwrap();
+    assert!(events.iter().any(|e| e.kind == EventKind::Prompt
+        && e.payload["text"]
+            .as_str()
+            .is_some_and(|t| t.contains("inbox-item.md"))));
+
+    // Outcome recording via the user's gh CLI (shimmed): merged PR lands
+    // in outcome memory once, idempotently, and is visible on the item.
+    std::env::remove_var("OPENADE_GITHUB_MEMORY");
+    let shim = gh_pr_view_shim(tmp.path(), "MERGED");
+    std::env::set_var("OPENADE_GH_BIN", &shim);
+    let result = daemon.record_inbox_outcome(meta.id).await.unwrap();
+    assert_eq!(result["recorded"], true);
+    assert_eq!(result["kind"], "merged");
+    let again = daemon.record_inbox_outcome(meta.id).await.unwrap();
+    assert_eq!(again["recorded"], false);
+    let outcomes = backend.inbox_item(item_id).await.unwrap()["outcomes"].clone();
+    assert!(outcomes
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|o| o["kind"] == "merged" && o["pr_url"] == "https://gh/pr/42"));
+    let events = daemon.store().read_transcript(meta.id).unwrap();
+    assert!(events
+        .iter()
+        .any(|e| e.kind == EventKind::Outcome && e.payload["kind"] == "merged"));
+
+    // Open PR → nothing recorded yet; gh disabled → the reason is named;
+    // a session without an inbox link is a clean error.
+    std::fs::create_dir_all(tmp.path().join("open")).unwrap();
+    let open_shim = gh_pr_view_shim(&tmp.path().join("open"), "OPEN");
+    std::env::set_var("OPENADE_GH_BIN", &open_shim);
+    let result = daemon.record_inbox_outcome(peek.id).await.unwrap();
+    assert_eq!(result["recorded"], false);
+    assert!(result["note"].as_str().unwrap().contains("no decided PR"));
+    std::env::set_var("OPENADE_GITHUB_MEMORY", "0");
+    let result = daemon.record_inbox_outcome(peek.id).await.unwrap();
+    assert_eq!(result["recorded"], false);
+    assert!(result["note"]
+        .as_str()
+        .unwrap()
+        .contains("gh CLI not available"));
+    std::env::remove_var("OPENADE_GITHUB_MEMORY");
+    let plain = daemon.launch(launch_req(&repo, "true"), None).unwrap();
+    let err = daemon.record_inbox_outcome(plain.id).await.unwrap_err();
+    assert!(matches!(err, DaemonError::Workspace(_)));
+
+    // A shared-id entry with no workspace configured is skipped quietly
+    // (local mode cannot deliver verdicts), and a triage session whose
+    // transcript row vanished surfaces the store error.
+    std::env::set_var("OPENADE_GH_BIN", &shim); // back to the MERGED shim
+    daemon.shared_ids.lock().unwrap().insert(meta.id, 42);
+    let result = daemon.record_inbox_outcome(meta.id).await.unwrap();
+    assert_eq!(result["recorded"], false); // idempotent second write
+    {
+        let conn = rusqlite::Connection::open(tmp.path().join("data").join("index.db")).unwrap();
+        conn.execute(
+            "DELETE FROM events WHERE session_id = ?1",
+            rusqlite::params![meta.id.to_string()],
+        )
+        .unwrap();
+        conn.execute(
+            "DELETE FROM sessions WHERE id = ?1",
+            rusqlite::params![meta.id.to_string()],
+        )
+        .unwrap();
+    }
+    let err = daemon.record_inbox_outcome(meta.id).await.unwrap_err();
+    assert!(matches!(err, DaemonError::Transcript(_)), "{err}");
+
+    // A gh that errors (e.g. "no pull requests found") becomes the note.
+    let fail = tmp.path().join("gh-fail");
+    std::fs::write(
+        &fail,
+        "#!/bin/sh\necho 'no pull requests found' >&2\nexit 1\n",
+    )
+    .unwrap();
+    crate::memory_repo::tests::make_executable(&fail);
+    std::env::set_var("OPENADE_GH_BIN", &fail);
+    let result = daemon.record_inbox_outcome(meta.id).await.unwrap();
+    assert!(result["note"]
+        .as_str()
+        .unwrap()
+        .contains("no pull requests found"));
+
+    // A session that somehow lost its branch is a clean no-op.
+    daemon
+        .sessions
+        .lock()
+        .unwrap()
+        .get_mut(&peek.id)
+        .unwrap()
+        .branch = None;
+    let result = daemon.record_inbox_outcome(peek.id).await.unwrap();
+    assert!(result["note"].as_str().unwrap().contains("no branch"));
+
+    // A bare signal (no evidence, no join keys) renders a minimal doc.
+    backend
+        .post_signals(serde_json::json!({
+            "source": "ci",
+            "kind": "regression",
+            "severity": "low",
+            "title": "bare signal",
+        }))
+        .await
+        .unwrap();
+    let bare_id = backend.inbox(Some("new".into())).await.unwrap()["items"][0]["id"]
+        .as_i64()
+        .unwrap();
+    let bare = daemon
+        .start_from_inbox(FromInboxRequest {
+            item_id: bare_id,
+            harness: Harness::ClaudeCode,
+            repo_root: repo.clone(),
+            checkout: CheckoutMode::default(),
+            investigate: true,
+            command_override: Some(sh("true")),
+        })
+        .await
+        .unwrap();
+    let doc = std::fs::read_to_string(
+        bare.worktree_path
+            .clone()
+            .unwrap()
+            .join(".openade/inbox-item.md"),
+    )
+    .unwrap();
+    assert!(!doc.contains("Evidence:"), "{doc}");
+    assert!(!doc.contains("Join keys"), "{doc}");
+    assert!(!doc.contains("Prior outcomes"), "{doc}");
+    std::env::remove_var("OPENADE_GH_BIN");
+}
+
+/// Holding the env lock across awaits is fine in tests (see above).
+#[allow(clippy::await_holding_lock)]
+#[tokio::test]
+async fn remote_triage_attributes_to_the_member_and_verdicts_reach_shared_sessions() {
+    let _guard = catalog_mcp::testutil::ENV_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let tmp = TempDir::new().unwrap();
+    let repo = tmp.path().join("repo");
+    std::fs::create_dir(&repo).unwrap();
+    init_repo(&repo);
+    let (url, token, ws) = crate::workspace::tests::boot_server(&tmp.path().join("srv")).await;
+    std::env::set_var(crate::workspace::SERVER_URL_ENV, &url);
+    std::env::set_var(crate::workspace::SERVER_TOKEN_ENV, &token);
+    std::env::set_var(crate::workspace::SERVER_WORKSPACE_ENV, ws.to_string());
+    let daemon = Daemon::open(tmp.path().join("data")).unwrap();
+
+    // Remote inbox: ingest, triage; the SERVER attributes the accept to
+    // the member token, and every teammate's poll sees it.
+    let backend = daemon.inbox_backend();
+    assert_eq!(backend.name(), "remote");
+    backend
+        .post_signals(inbox_signal("prod timeout"))
+        .await
+        .unwrap();
+    let item_id = backend.inbox(None).await.unwrap()["items"][0]["id"]
+        .as_i64()
+        .unwrap();
+    let meta = daemon
+        .start_from_inbox(FromInboxRequest {
+            item_id,
+            harness: Harness::OpenCode,
+            repo_root: repo.clone(),
+            checkout: CheckoutMode::default(),
+            investigate: false,
+            command_override: Some(sh("true")),
+        })
+        .await
+        .unwrap();
+    let item = backend.inbox_item(item_id).await.unwrap();
+    assert_eq!(item["item"]["decided_by"], "casey");
+
+    // Share the triage session, then record the merged outcome: it lands
+    // on the server item AND stamps the shared session's verdict.
+    wait_state(&daemon, meta.id, SessionState::Completed);
+    let shared = daemon.share(meta.id).await.unwrap();
+    std::env::remove_var("OPENADE_GITHUB_MEMORY");
+    let shim = gh_pr_view_shim(tmp.path(), "MERGED");
+    std::env::set_var("OPENADE_GH_BIN", &shim);
+    let result = daemon.record_inbox_outcome(meta.id).await.unwrap();
+    assert_eq!(result["kind"], "merged");
+    let client = daemon.workspace_client().unwrap();
+    let sessions = client.sessions(None).await.unwrap();
+    let mine = sessions.iter().find(|s| s.id == shared.id).unwrap();
+    assert_eq!(mine.verdict.as_deref(), Some("merged"));
+
+    // A verdict aimed at a shared session the server no longer knows
+    // degrades to a warning — the outcome itself still lands.
+    backend
+        .post_signals(inbox_signal("second timeout"))
+        .await
+        .unwrap();
+    let second_item = backend.inbox(Some("new".into())).await.unwrap()["items"][0]["id"]
+        .as_i64()
+        .unwrap();
+    let second = daemon
+        .start_from_inbox(FromInboxRequest {
+            item_id: second_item,
+            harness: Harness::ClaudeCode,
+            repo_root: repo.clone(),
+            checkout: CheckoutMode::default(),
+            investigate: false,
+            command_override: Some(sh("true")),
+        })
+        .await
+        .unwrap();
+    daemon.shared_ids.lock().unwrap().insert(second.id, 99_999);
+    let result = daemon.record_inbox_outcome(second.id).await.unwrap();
+    assert_eq!(result["recorded"], true);
+
+    // And the verdict + upload age now annotate the next bundle's prior
+    // sessions (entity-matched read-back).
+    let record = serde_json::json!({
+        "title": "prior work",
+        "harness": "codex-cli",
+        "entity_ref": "repo:acme/payments-service",
+        "summary": "raised poll interval",
+        "markdown": "# prior work",
+        "events": [],
+    });
+    let uploaded = client.upload(&record).await.unwrap();
+    client.set_verdict(uploaded.id, "reverted").await.unwrap();
+    let daemon2 = daemon.with_catalog(Arc::new(
+        catalog_mcp::testutil::MockProvider::with_payments_graph(),
+    ));
+    std::env::set_var("OPENADE_GH_BIN", "/custom/gh");
+    let bundle = daemon2
+        .build_bundle("repo:acme/payments-service", None)
+        .await
+        .unwrap();
+    let markdown = bundle.to_markdown();
+    assert!(markdown.contains("[verdict: reverted]"), "{markdown}");
+    assert!(markdown.contains("days ago"), "{markdown}");
+    std::env::remove_var("OPENADE_GH_BIN");
+
+    for var in [
+        crate::workspace::SERVER_URL_ENV,
+        crate::workspace::SERVER_TOKEN_ENV,
+        crate::workspace::SERVER_WORKSPACE_ENV,
+        "OPENADE_GH_BIN",
+    ] {
+        std::env::remove_var(var);
+    }
+}
