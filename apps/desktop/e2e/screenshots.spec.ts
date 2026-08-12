@@ -87,6 +87,76 @@ test("capture README screenshots", async ({ page, request }) => {
   await page.screenshot({ path: img("team-pickup.png") });
 });
 
+test("capture the inbox screenshots", async ({ page, request }) => {
+  // A believable triage queue: two new signals, one taken by a teammate.
+  const minted = await request.post(`${server}/tokens`, {
+    headers: admin,
+    data: { name: "sam" },
+  });
+  const token = (await minted.json()).token as string;
+  const auth = { Authorization: `Bearer ${token}` };
+  await request.post(`${server}/signals`, {
+    headers: auth,
+    data: [
+      {
+        source: "sentry",
+        source_ref: "E-88",
+        kind: "exception",
+        severity: "critical",
+        title: "NPE in checkout poller",
+        body: "TypeError: cannot read x of undefined at poller.ts:42",
+        evidence: [
+          { kind: "stack_trace", label: "sentry trace", url: "https://sentry.example/e/88" },
+          { kind: "replay", label: "session replay", url: "https://posthog.example/r/9" },
+        ],
+        join_keys: { release: "v2.3.0" },
+        affected_count: 128,
+      },
+      {
+        source: "zendesk",
+        kind: "ticket",
+        severity: "medium",
+        title: "Customers report slow dashboard loads",
+        body: "Six tickets this week mention the analytics dashboard taking >10s.",
+        evidence: [{ kind: "ticket", label: "ZD-4411", url: "https://zendesk.example/t/4411" }],
+        affected_count: 6,
+      },
+      {
+        source: "posthog",
+        kind: "ux_friction",
+        severity: "high",
+        title: "Rage clicks on the export button",
+        affected_count: 31,
+      },
+    ],
+  });
+  // sam takes the rage-click item so the "In progress" group shows.
+  const items = await (
+    await request.get(`${server}/inbox?status=new`, { headers: auth })
+  ).json();
+  const rage = items.items.find(
+    (i: { title: string }) => i.title === "Rage clicks on the export button",
+  );
+  await request.post(`${server}/inbox/${rage.id}/accept`, {
+    headers: auth,
+    data: {},
+  });
+
+  await page.goto("/");
+  await page.getByTestId("view-inbox").click();
+  await expect(page.getByTestId("inbox-row").first()).toBeVisible();
+  await page.screenshot({ path: img("inbox-view.png") });
+
+  // The one-screen decision view with the dismiss dialog open.
+  await page
+    .locator('[data-testid="inbox-row"]', { hasText: "NPE in checkout" })
+    .click();
+  await expect(page.getByTestId("inbox-detail")).toBeVisible();
+  await page.getByTestId("dismiss-button").click();
+  await expect(page.getByTestId("dismiss-dialog")).toBeVisible();
+  await page.screenshot({ path: img("inbox-dismiss.png") });
+});
+
 test("capture the onboarding screenshot", async ({ page }) => {
   // The unconfigured daemon + UI pair shows the welcome flow (now with
   // the multiplayer section).

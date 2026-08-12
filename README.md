@@ -64,6 +64,17 @@ telemetry, local-first.
   manual and per-session; access is by revocable member tokens; shared
   history on an entity flows into the next session's context bundle
   automatically. Full guide: [docs/multiplayer.md](docs/multiplayer.md).
+- **Inbox + outcome memory** — the outside world flows IN: errors,
+  tickets, and feedback post a normalized schema to `POST /signals`
+  (team server or your local daemon — no login, no new auth) and land in
+  a triage **Inbox** with severity, impact, and deep-link evidence.
+  Accept an item and a session launches carrying the evidence; dismiss
+  it with a structured reason and that lands in **outcome memory**,
+  anchored to the signal's fingerprint — a dismissed problem that comes
+  back 3× bigger escalates itself back into the queue. When a triage
+  session's PR merges (checked through your own `gh`), the verdict feeds
+  every future context bundle: memory that knows what actually shipped.
+  Full guide: [docs/signals.md](docs/signals.md).
 - **Cross-harness handoff** — move a task Claude → Gemini (any direction) in
   place: same worktree and branch, rules re-materialized, a written handoff
   summary, and the new harness prompted to pick up where the old one left
@@ -160,7 +171,9 @@ Everything is skippable because GitHub memory is zero-config.
 Useful daemon endpoints: `GET /sessions`, `GET /sessions/{id}/scrollback`,
 `POST /sessions/{id}/input`, `GET /sessions/{id}/diff`, `.../files`,
 `POST /sessions/{id}/artifact`, `POST /sessions/{id}/handoff`,
-`POST /sessions/{id}/share`, `POST /sessions/pickup`,
+`POST /sessions/{id}/share`, `POST /sessions/pickup`, `POST /signals`,
+`GET /inbox`, `POST /inbox/{id}/accept|dismiss`,
+`POST /sessions/from-inbox`, `POST /sessions/{id}/inbox-outcome`,
 `GET /workspace/sessions` (team history, proxied so the member token stays
 in the daemon), `DELETE /sessions/{id}`, `DELETE /sessions/{id}/worktree`,
 `GET /projects`,
@@ -236,6 +249,36 @@ different harness:
 
 ![Picking up a shared session](docs/img/team-pickup.png)
 
+## The Inbox: signals in, outcomes remembered
+
+Xirp-class tools know what your *agents* did. OpenADE also knows what
+the *world* did about it. Any tool that can POST JSON — a Sentry
+webhook, a CI job, a support script — pushes normalized signals into the
+Inbox ([schema](docs/signals.md)); recurrences dedup by fingerprint
+instead of piling up. Every member triages the same queue from their own
+app: one-screen decisions, keyboard-first (`j/k` move, `o` open, `a`
+accept, `d` dismiss, `1–4` pick the reason).
+
+![The Inbox triage queue](docs/img/inbox-view.png)
+
+Accepting launches a **triage session** in any harness with the evidence
+and the fingerprint's outcome history written into
+`.openade/inbox-item.md`. Dismissing records a structured reason that
+steers future triage — and when the impact grows 3× past the
+dismissal-time snapshot, the item escalates itself back.
+
+![Dismissing with a structured reason](docs/img/inbox-dismiss.png)
+
+The loop closes with **outcome memory**: when a triage session ends,
+OpenADE reads the task branch's PR fate through your own `gh` CLI and
+records `merged` / `closed` (idempotently) against the signal's
+fingerprint and the shared session. Prior sessions in every context
+bundle then carry `[verdict: merged]`-style annotations with ages —
+entries older than 90 days are marked `STALE` (they inform, they never
+veto a retry), and anything the context budget can't fit is **named**
+rather than silently dropped. No server required: with multiplayer off,
+the same inbox runs embedded in your local daemon.
+
 ## Architecture
 
 ```
@@ -282,6 +325,7 @@ browser).
 | [catalog-mcp tools](docs/catalog-mcp-tools.md) | MCP tool schemas, auth, design rules |
 | [Phase 0 spike](docs/phase-0-spike.md) | Real-CLI verification plan (the gate to beta) |
 | [Multiplayer](docs/multiplayer.md) | Self-hosted team workspaces: share, browse, pick up in any harness |
+| [Signals & Inbox](docs/signals.md) | The webhook schema, triage flow, and outcome memory |
 | [Testing & coverage](docs/testing.md) | Test strategy, 100% line coverage methodology |
 | [Manual e2e record](docs/manual-e2e.md) | By-hand verification of the assembled system |
 | [Desktop app](apps/desktop/README.md) | UI development and the Tauri shell |
@@ -290,9 +334,9 @@ browser).
 ## Testing
 
 ```sh
-cargo test                                        # 181 Rust tests (real git, real PTYs, mock Backstage, fake gh, a real workspace server, fault injection)
+cargo test                                        # 207 Rust tests (real git, real PTYs, mock Backstage, fake gh, a real workspace server, fault injection)
 cd apps/desktop && npm test                       # UI unit tests (vitest)
-cd apps/desktop && npm run e2e                    # 21 Playwright flows: real daemon + real openade-server + mock Backstage + gh shim + real Chromium
+cd apps/desktop && npm run e2e                    # 25 Playwright flows: real daemon + real openade-server + mock Backstage + gh shim + real Chromium
 ```
 
 Product-code line coverage is 100% on both the Rust workspace and the UI —
@@ -316,4 +360,6 @@ Tauri-shell compile check. Releases are automatic: every push to main reads the 
 
 ## License
 
-[Apache-2.0](LICENSE)
+[Apache-2.0](LICENSE). The signal schema and outcome-memory design are
+derived from [Merge0](https://github.com/hkd987/Merge0) (MIT) — see
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

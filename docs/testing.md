@@ -4,9 +4,9 @@ Three layers, all wired into CI (`.github/workflows/ci.yml`):
 
 | Layer | What runs | Command |
 |---|---|---|
-| Rust unit/integration | 181 tests across the workspace — real git repos (worktrees, artifact branches), real PTYs (spawned shells), real HTTP routers (tower `oneshot`), a real `openade-server` booted in-process for the multiplayer client/share/pickup tests, mock Backstage (`wiremock`), fake `gh` CLI shims (GitHub memory source + a stateful contents-API shim for the shared team memory repo), and real fault injection (corrupt SQLite, failing git, truncated HTTP bodies, failing gh, unreachable/revoked workspace server) | `cargo test` |
+| Rust unit/integration | 207 tests across the workspace — real git repos (worktrees, artifact branches), real PTYs (spawned shells), real HTTP routers (tower `oneshot`), a real `openade-server` booted in-process for the multiplayer client/share/pickup tests, mock Backstage (`wiremock`), fake `gh` CLI shims (GitHub memory source + a stateful contents-API shim for the shared team memory repo), and real fault injection (corrupt SQLite, failing git, truncated HTTP bodies, failing gh, unreachable/revoked workspace server, RAISE(ABORT) triggers and type-poisoned columns inside inbox transactions) | `cargo test` |
 | UI unit | vitest + testing-library: API client and every component (App, session card, launch form, session detail, terminal) | `cd apps/desktop && npm test` |
-| End-to-end | 21 Playwright tests drive real Chromium against the real daemon (`cargo run`), a real `openade-server` (fresh data dir per run), a mock Backstage, a `gh` CLI shim, and the Vite dev server; harness CLIs are shims created per run | `cd apps/desktop && npm run e2e` |
+| End-to-end | 25 Playwright tests drive real Chromium against the real daemon (`cargo run`), a real `openade-server` (fresh data dir per run), a mock Backstage, a `gh` CLI shim, and the Vite dev server; harness CLIs are shims created per run | `cd apps/desktop && npm run e2e` |
 
 ## End-to-end flow matrix
 
@@ -41,6 +41,16 @@ Multiplayer flows run against a real `openade-server`
 | Cross-harness pickup: Claude Code record → Copilot CLI session with `AGENTS.md` + `.openade/pickup.md` | `anyone can pick the session up in a different harness` |
 | Revoked token → actionable error banner → fresh token recovers | `a revoked token turns into an actionable Team view error` |
 
+Signal/inbox flows against the same real server
+(`apps/desktop/e2e/triage.spec.ts`):
+
+| Flow | Test |
+|---|---|
+| Webhook-posted signal → inbox badge → severity/impact row | `a posted signal lands in every member's inbox with a badge` |
+| Structured dismissal (with the outcome-memory explainer) → 3× recurrence escalates back, dismissal still in memory | `dismissal is recorded and a 3x recurrence escalates back` |
+| Accept → triage session carries evidence + prior outcomes in `.openade/inbox-item.md`; teammates see "Accepted by …" | `accepting starts a triage session carrying the evidence` |
+| Local embedded inbox with NO server configured (attributed to $USER) | `the local inbox works with no server configured` |
+
 Endpoint-level flows without UI affordances (worktree cleanup with the dirty
 guard, error statuses, entity-filtered listings) are covered end-to-end at
 the HTTP layer inside the Rust suite (`server_tests.rs`) and in the
@@ -60,8 +70,8 @@ the HTTP layer inside the Rust suite (`server_tests.rs`) and in the
 
 ## Coverage
 
-**Rust product code: 100% line coverage** (all 3,431 instrumented lines
-across all 22 product source files execute under `cargo test`), measured
+**Rust product code: 100% line coverage** (all 4,509 instrumented lines
+across all 24 product source files execute under `cargo test`), measured
 with `cargo llvm-cov` in lcov line accounting:
 
 ```
