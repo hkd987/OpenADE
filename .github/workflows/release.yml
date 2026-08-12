@@ -100,7 +100,7 @@ jobs:
           key: ${{ matrix.target }}
 
       - name: Build release binaries
-        run: cargo build --release --locked --target ${{ matrix.target }} -p openade-daemon -p catalog-mcp
+        run: cargo build --release --locked --target ${{ matrix.target }} -p openade-daemon -p catalog-mcp -p openade-server
 
       - name: Package
         run: |
@@ -110,6 +110,7 @@ jobs:
           mkdir -p "dist/${pkg}"
           cp "target/${{ matrix.target }}/release/openade-daemon" \
              "target/${{ matrix.target }}/release/catalog-mcp" \
+             "target/${{ matrix.target }}/release/openade-server" \
              LICENSE README.md "dist/${pkg}/"
           tar -C dist -czf "dist/${pkg}.tar.gz" "${pkg}"
           (cd dist && shasum -a 256 "${pkg}.tar.gz" > "${pkg}.tar.gz.sha256")
