@@ -264,3 +264,23 @@ async fn empty_admin_token_never_grants_admin() {
         .unwrap();
     assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
 }
+
+#[tokio::test]
+async fn database_faults_become_500s_not_panics() {
+    let (tmp, app) = app();
+    // Break the schema out from under the running server.
+    rusqlite::Connection::open(tmp.path().join("server.db"))
+        .unwrap()
+        .execute("DROP TABLE workspaces", [])
+        .unwrap();
+    let res = app
+        .clone()
+        .oneshot(request("GET", "/workspaces", Some("admin-secret"), None))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(json(res).await["error"]
+        .as_str()
+        .unwrap()
+        .contains("workspaces"));
+}

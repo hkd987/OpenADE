@@ -1426,15 +1426,84 @@ async fn share_and_pickup_round_trip_through_a_real_workspace_server() {
         .any(|p| p.session_id.starts_with("workspace-")));
     std::env::remove_var("OPENADE_GH_BIN");
 
-    // Matching entity → the shared session becomes prior context. Use the
-    // uploaded record's entity via the workspace list path directly.
-    let sessions = daemon2
-        .workspace_client()
-        .unwrap()
-        .sessions(Some("repo:acme/payments"))
+    // Matching entity → the shared session becomes prior context in the
+    // next session's bundle, attributed to its sharer.
+    std::env::set_var("OPENADE_GH_BIN", "/custom/gh");
+    let client = daemon2.workspace_client().unwrap();
+    client
+        .upload(&serde_json::json!({
+            "title": "tune the poller",
+            "harness": "gemini-cli",
+            "entity_ref": "repo:acme/payments-service",
+            "summary": "Raised the poll interval",
+            "markdown": "# tune the poller",
+            "events": [],
+        }))
         .await
         .unwrap();
-    assert_eq!(sessions.len(), 1);
+    let bundle = daemon2
+        .build_bundle("repo:acme/payments-service", None)
+        .await
+        .unwrap();
+    assert!(bundle
+        .prior_sessions
+        .iter()
+        .any(|p| p.session_id.starts_with("workspace-") && p.summary.contains("shared by casey")));
+
+    // Server unreachable → the read-back degrades silently (doc link stays,
+    // no workspace prior sessions, bundle still builds).
+    std::env::set_var(crate::workspace::SERVER_URL_ENV, "http://127.0.0.1:1");
+    let bundle = daemon2
+        .build_bundle("repo:acme/payments-service", None)
+        .await
+        .unwrap();
+    assert!(bundle
+        .docs
+        .iter()
+        .any(|d| d.title.starts_with("Team workspace")));
+    assert!(!bundle
+        .prior_sessions
+        .iter()
+        .any(|p| p.session_id.starts_with("workspace-")));
+    std::env::set_var(crate::workspace::SERVER_URL_ENV, &url);
+    std::env::remove_var("OPENADE_GH_BIN");
+
+    // Records without prompt events (or with malformed events) still pick
+    // up cleanly — the takeover doc just has no "Original prompts" section.
+    for events in [
+        serde_json::json!([{ "kind": "output" }]),
+        serde_json::json!(42),
+    ] {
+        let bare = client
+            .upload(&serde_json::json!({
+                "title": "bare notes",
+                "harness": "codex-cli",
+                "summary": "s",
+                "markdown": "# bare",
+                "events": events,
+            }))
+            .await
+            .unwrap();
+        let picked = daemon2
+            .pickup(PickupRequest {
+                workspace_session_id: bare.id,
+                harness: Harness::ClaudeCode,
+                repo_root: repo.clone(),
+                checkout: CheckoutMode::default(),
+                command_override: Some(sh("true")),
+            })
+            .await
+            .unwrap();
+        let doc = std::fs::read_to_string(
+            picked
+                .worktree_path
+                .clone()
+                .unwrap()
+                .join(".openade/pickup.md"),
+        )
+        .unwrap();
+        assert!(!doc.contains("## Original prompts"), "{doc}");
+    }
 
     // Unconfigured daemon: share fails with instructions; pickup too.
     for var in [

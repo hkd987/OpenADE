@@ -428,7 +428,8 @@ impl Daemon {
         use crate::artifact::{Summarizer, TemplateSummarizer};
         let client = self.workspace_client().ok_or_else(|| {
             DaemonError::Workspace(
-                "no workspace server configured — set the server URL, member token, and                  workspace in Settings"
+                "no workspace server configured — set the server URL, member token, \
+                 and workspace in Settings"
                     .into(),
             )
         })?;
@@ -467,7 +468,7 @@ impl Daemon {
 
 Shared by **{}** (originally run on {}), uploaded {}.
 
-             ## Summary
+## Summary
 
 {}
 
@@ -520,11 +521,15 @@ Shared by **{}** (originally run on {}), uploaded {}.
             command_override: req.command_override,
         };
         let meta = self.launch(launch, None)?;
-        if let Some(wt) = &meta.worktree_path {
-            let dot = wt.join(".openade");
-            fs::create_dir_all(&dot)?;
-            fs::write(dot.join("pickup.md"), &doc)?;
-        }
+        // Launched sessions always have a working directory (worktree or
+        // the repo itself in main-checkout mode).
+        let wt = meta
+            .worktree_path
+            .clone()
+            .expect("launched session has a workdir");
+        let dot = wt.join(".openade");
+        fs::create_dir_all(&dot)?;
+        fs::write(dot.join("pickup.md"), &doc)?;
         Ok(meta)
     }
 

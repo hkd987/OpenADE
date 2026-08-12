@@ -697,3 +697,134 @@ async fn launch_errors_are_surfaced_as_api_errors() {
         .unwrap()
         .contains("not a git repository"));
 }
+
+// Holding the env lock across awaits is fine in tests: the lock is exactly
+// what keeps concurrent env-mutating tests from interleaving.
+#[allow(clippy::await_holding_lock)]
+#[tokio::test]
+async fn share_pickup_and_team_views_over_http() {
+    let _guard = catalog_mcp::testutil::ENV_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    for var in [
+        crate::workspace::SERVER_URL_ENV,
+        crate::workspace::SERVER_TOKEN_ENV,
+        crate::workspace::SERVER_WORKSPACE_ENV,
+    ] {
+        std::env::remove_var(var);
+    }
+    let (tmp, app, repo) = test_world();
+    let meta = create_test_session(&app, &repo, "true").await;
+    let id = meta["id"].as_str().unwrap().to_string();
+
+    // Unconfigured: share names the fix, team views are 404s.
+    let res = app
+        .clone()
+        .oneshot(request(
+            "POST",
+            &format!("/sessions/{id}/share"),
+            Some(serde_json::json!({})),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_GATEWAY);
+    assert!(body_json(res).await["error"]
+        .as_str()
+        .unwrap()
+        .contains("no workspace server configured"));
+    for uri in ["/workspace/sessions", "/workspace/sessions/1"] {
+        let res = app
+            .clone()
+            .oneshot(request("GET", uri, None))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::NOT_FOUND);
+    }
+
+    // Configured against a real workspace server: the whole team story
+    // works over the daemon's HTTP surface.
+    let (url, token, ws) = crate::workspace::tests::boot_server(&tmp.path().join("srv")).await;
+    std::env::set_var(crate::workspace::SERVER_URL_ENV, &url);
+    std::env::set_var(crate::workspace::SERVER_TOKEN_ENV, &token);
+    std::env::set_var(crate::workspace::SERVER_WORKSPACE_ENV, ws.to_string());
+
+    let res = app
+        .clone()
+        .oneshot(request(
+            "POST",
+            &format!("/sessions/{id}/share"),
+            Some(serde_json::json!({})),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::CREATED);
+    let shared = body_json(res).await;
+    assert_eq!(shared["shared_by"], "casey");
+    let sid = shared["id"].as_i64().unwrap();
+
+    let res = app
+        .clone()
+        .oneshot(request("GET", "/workspace/sessions", None))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(
+        body_json(res).await["sessions"].as_array().unwrap().len(),
+        1
+    );
+
+    let res = app
+        .clone()
+        .oneshot(request("GET", &format!("/workspace/sessions/{sid}"), None))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let detail = body_json(res).await;
+    assert_eq!(detail["session"]["title"], "http test");
+    assert!(detail["markdown"].as_str().unwrap().contains("http test"));
+
+    let pickup = serde_json::json!({
+        "workspace_session_id": sid,
+        "harness": "gemini-cli",
+        "repo_root": repo,
+        "command_override": crate::pty::CommandSpec::new("sh").arg("-c").arg("true"),
+    });
+    let res = app
+        .clone()
+        .oneshot(request("POST", "/sessions/pickup", Some(pickup.clone())))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::CREATED);
+    let picked = body_json(res).await;
+    assert_eq!(picked["harness"], "gemini-cli");
+    assert_eq!(picked["title"], "pickup: http test");
+
+    // Server gone: every proxied route degrades to 502 with the reason.
+    std::env::set_var(crate::workspace::SERVER_URL_ENV, "http://127.0.0.1:1");
+    let res = app
+        .clone()
+        .oneshot(request("POST", "/sessions/pickup", Some(pickup)))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_GATEWAY);
+    for uri in ["/workspace/sessions", "/workspace/sessions/1"] {
+        let res = app
+            .clone()
+            .oneshot(request("GET", uri, None))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::BAD_GATEWAY);
+        assert!(body_json(res).await["error"]
+            .as_str()
+            .unwrap()
+            .contains("unreachable"));
+    }
+
+    for var in [
+        crate::workspace::SERVER_URL_ENV,
+        crate::workspace::SERVER_TOKEN_ENV,
+        crate::workspace::SERVER_WORKSPACE_ENV,
+    ] {
+        std::env::remove_var(var);
+    }
+}
