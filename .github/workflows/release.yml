@@ -86,8 +86,11 @@ jobs:
             runner: ubuntu-latest
           - target: aarch64-unknown-linux-gnu
             runner: ubuntu-24.04-arm
+          # Intel macOS is cross-compiled from the arm64 runner: the
+          # macos-13 (Intel) runner image is retired and jobs requesting
+          # it queue forever.
           - target: x86_64-apple-darwin
-            runner: macos-13
+            runner: macos-latest
           - target: aarch64-apple-darwin
             runner: macos-latest
     steps:
