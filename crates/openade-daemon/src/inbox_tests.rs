@@ -86,6 +86,15 @@ async fn embedded_backend_round_trips_the_full_triage_story() {
     let detail = backend.inbox_item(other).await.unwrap();
     assert_eq!(detail["outcomes"][0]["kind"], "dismissed");
 
+    // A 3x recurrence escalates the dismissed item straight through the
+    // embedded ingest path.
+    let res = backend.post_signals(signal_json("slow", 3)).await.unwrap();
+    assert_eq!(res["escalated"], 1);
+    assert_eq!(
+        backend.inbox_item(other).await.unwrap()["item"]["status"],
+        "new"
+    );
+
     // Outcome recording is idempotent per kind.
     let res = backend
         .record_outcome(id, "merged".into(), Some("https://gh/pr/1".into()), None)

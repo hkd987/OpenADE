@@ -625,3 +625,30 @@ async fn dismissal_escalation_and_verdicts_over_http() {
         .unwrap();
     assert_eq!(res.status(), StatusCode::NOT_FOUND);
 }
+
+#[tokio::test]
+async fn outcome_on_a_missing_item_is_a_404_over_http() {
+    let (_tmp, app) = app();
+    let minted = app
+        .clone()
+        .oneshot(request(
+            "POST",
+            "/tokens",
+            Some("admin-secret"),
+            Some(serde_json::json!({ "name": "casey" })),
+        ))
+        .await
+        .unwrap();
+    let member = json(minted).await["token"].as_str().unwrap().to_string();
+    let res = app
+        .clone()
+        .oneshot(request(
+            "POST",
+            "/inbox/999/outcomes",
+            Some(&member),
+            Some(serde_json::json!({ "kind": "merged" })),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+}

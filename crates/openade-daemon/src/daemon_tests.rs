@@ -1682,6 +1682,90 @@ async fn triage_sessions_carry_evidence_and_record_outcomes_locally() {
     let plain = daemon.launch(launch_req(&repo, "true"), None).unwrap();
     let err = daemon.record_inbox_outcome(plain.id).await.unwrap_err();
     assert!(matches!(err, DaemonError::Workspace(_)));
+
+    // A shared-id entry with no workspace configured is skipped quietly
+    // (local mode cannot deliver verdicts), and a triage session whose
+    // transcript row vanished surfaces the store error.
+    std::env::set_var("OPENADE_GH_BIN", &shim); // back to the MERGED shim
+    daemon.shared_ids.lock().unwrap().insert(meta.id, 42);
+    let result = daemon.record_inbox_outcome(meta.id).await.unwrap();
+    assert_eq!(result["recorded"], false); // idempotent second write
+    {
+        let conn = rusqlite::Connection::open(tmp.path().join("data").join("index.db")).unwrap();
+        conn.execute(
+            "DELETE FROM events WHERE session_id = ?1",
+            rusqlite::params![meta.id.to_string()],
+        )
+        .unwrap();
+        conn.execute(
+            "DELETE FROM sessions WHERE id = ?1",
+            rusqlite::params![meta.id.to_string()],
+        )
+        .unwrap();
+    }
+    let err = daemon.record_inbox_outcome(meta.id).await.unwrap_err();
+    assert!(matches!(err, DaemonError::Transcript(_)), "{err}");
+
+    // A gh that errors (e.g. "no pull requests found") becomes the note.
+    let fail = tmp.path().join("gh-fail");
+    std::fs::write(
+        &fail,
+        "#!/bin/sh\necho 'no pull requests found' >&2\nexit 1\n",
+    )
+    .unwrap();
+    crate::memory_repo::tests::make_executable(&fail);
+    std::env::set_var("OPENADE_GH_BIN", &fail);
+    let result = daemon.record_inbox_outcome(meta.id).await.unwrap();
+    assert!(result["note"]
+        .as_str()
+        .unwrap()
+        .contains("no pull requests found"));
+
+    // A session that somehow lost its branch is a clean no-op.
+    daemon
+        .sessions
+        .lock()
+        .unwrap()
+        .get_mut(&peek.id)
+        .unwrap()
+        .branch = None;
+    let result = daemon.record_inbox_outcome(peek.id).await.unwrap();
+    assert!(result["note"].as_str().unwrap().contains("no branch"));
+
+    // A bare signal (no evidence, no join keys) renders a minimal doc.
+    backend
+        .post_signals(serde_json::json!({
+            "source": "ci",
+            "kind": "regression",
+            "severity": "low",
+            "title": "bare signal",
+        }))
+        .await
+        .unwrap();
+    let bare_id = backend.inbox(Some("new".into())).await.unwrap()["items"][0]["id"]
+        .as_i64()
+        .unwrap();
+    let bare = daemon
+        .start_from_inbox(FromInboxRequest {
+            item_id: bare_id,
+            harness: Harness::ClaudeCode,
+            repo_root: repo.clone(),
+            checkout: CheckoutMode::default(),
+            investigate: true,
+            command_override: Some(sh("true")),
+        })
+        .await
+        .unwrap();
+    let doc = std::fs::read_to_string(
+        bare.worktree_path
+            .clone()
+            .unwrap()
+            .join(".openade/inbox-item.md"),
+    )
+    .unwrap();
+    assert!(!doc.contains("Evidence:"), "{doc}");
+    assert!(!doc.contains("Join keys"), "{doc}");
+    assert!(!doc.contains("Prior outcomes"), "{doc}");
     std::env::remove_var("OPENADE_GH_BIN");
 }
 
@@ -1740,6 +1824,30 @@ async fn remote_triage_attributes_to_the_member_and_verdicts_reach_shared_sessio
     let sessions = client.sessions(None).await.unwrap();
     let mine = sessions.iter().find(|s| s.id == shared.id).unwrap();
     assert_eq!(mine.verdict.as_deref(), Some("merged"));
+
+    // A verdict aimed at a shared session the server no longer knows
+    // degrades to a warning — the outcome itself still lands.
+    backend
+        .post_signals(inbox_signal("second timeout"))
+        .await
+        .unwrap();
+    let second_item = backend.inbox(Some("new".into())).await.unwrap()["items"][0]["id"]
+        .as_i64()
+        .unwrap();
+    let second = daemon
+        .start_from_inbox(FromInboxRequest {
+            item_id: second_item,
+            harness: Harness::ClaudeCode,
+            repo_root: repo.clone(),
+            checkout: CheckoutMode::default(),
+            investigate: false,
+            command_override: Some(sh("true")),
+        })
+        .await
+        .unwrap();
+    daemon.shared_ids.lock().unwrap().insert(second.id, 99_999);
+    let result = daemon.record_inbox_outcome(second.id).await.unwrap();
+    assert_eq!(result["recorded"], true);
 
     // And the verdict + upload age now annotate the next bundle's prior
     // sessions (entity-matched read-back).

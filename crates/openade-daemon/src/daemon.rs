@@ -527,30 +527,28 @@ impl Daemon {
             detail["signals"][0]["first_seen"].as_str().unwrap_or("?"),
             item["last_seen"].as_str().unwrap_or("?"),
         );
-        if let Some(signals) = detail["signals"].as_array() {
-            for sig in signals {
-                doc.push_str(&format!(
-                    "\n## Signal from {} ({})\n\n{}\n",
-                    sig["source"].as_str().unwrap_or("?"),
-                    sig["kind"].as_str().unwrap_or("?"),
-                    sig["body"].as_str().unwrap_or(""),
-                ));
-                if let Some(evidence) = sig["evidence"].as_array() {
-                    if !evidence.is_empty() {
-                        doc.push_str("\nEvidence:\n");
-                        for e in evidence {
-                            doc.push_str(&format!(
-                                "- [{}]({})\n",
-                                e["label"].as_str().unwrap_or("link"),
-                                e["url"].as_str().unwrap_or(""),
-                            ));
-                        }
-                    }
+        let signals = detail["signals"].as_array().cloned().unwrap_or_default();
+        for sig in &signals {
+            doc.push_str(&format!(
+                "\n## Signal from {} ({})\n\n{}\n",
+                sig["source"].as_str().unwrap_or("?"),
+                sig["kind"].as_str().unwrap_or("?"),
+                sig["body"].as_str().unwrap_or(""),
+            ));
+            let evidence = sig["evidence"].as_array().cloned().unwrap_or_default();
+            if !evidence.is_empty() {
+                doc.push_str("\nEvidence:\n");
+                for e in &evidence {
+                    doc.push_str(&format!(
+                        "- [{}]({})\n",
+                        e["label"].as_str().unwrap_or("link"),
+                        e["url"].as_str().unwrap_or(""),
+                    ));
                 }
-                let keys = &sig["join_keys"];
-                if keys.as_object().is_some_and(|o| !o.is_empty()) {
-                    doc.push_str(&format!("\nJoin keys: `{keys}`\n"));
-                }
+            }
+            let keys = &sig["join_keys"];
+            if keys.as_object().is_some_and(|o| !o.is_empty()) {
+                doc.push_str(&format!("\nJoin keys: `{keys}`\n"));
             }
         }
         let outcomes = detail["outcomes"].as_array().cloned().unwrap_or_default();

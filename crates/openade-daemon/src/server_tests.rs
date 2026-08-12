@@ -828,3 +828,219 @@ async fn share_pickup_and_team_views_over_http() {
         std::env::remove_var(var);
     }
 }
+
+/// Holding the env lock across awaits is fine in tests (see above).
+#[allow(clippy::await_holding_lock)]
+#[tokio::test]
+async fn inbox_routes_run_the_triage_story_over_http() {
+    let _guard = catalog_mcp::testutil::ENV_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    for var in [
+        crate::workspace::SERVER_URL_ENV,
+        crate::workspace::SERVER_TOKEN_ENV,
+        crate::workspace::SERVER_WORKSPACE_ENV,
+    ] {
+        std::env::remove_var(var);
+    }
+    let (_tmp, app, repo) = test_world();
+
+    // No server configured → the embedded local inbox serves the routes.
+    let res = app
+        .clone()
+        .oneshot(request("GET", "/config", None))
+        .await
+        .unwrap();
+    assert_eq!(body_json(res).await["inbox_backend"], "local");
+
+    // Ingest (bad → 400; good → counts), list, detail.
+    let res = app
+        .clone()
+        .oneshot(request(
+            "POST",
+            "/signals",
+            Some(serde_json::json!({ "source": " ", "kind": "exception",
+                "severity": "low", "title": "x" })),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    let res = app
+        .clone()
+        .oneshot(request(
+            "POST",
+            "/signals",
+            Some(serde_json::json!({
+                "source": "sentry", "kind": "exception", "severity": "critical",
+                "title": "NPE", "affected_count": 5,
+                "evidence": [{ "kind": "issue", "label": "gh issue",
+                               "url": "https://gh/i/1" }],
+            })),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(body_json(res).await["inserted"], 1);
+    let res = app
+        .clone()
+        .oneshot(request("GET", "/inbox?status=new", None))
+        .await
+        .unwrap();
+    let items = body_json(res).await;
+    let iid = items["items"][0]["id"].as_i64().unwrap();
+    let res = app
+        .clone()
+        .oneshot(request("GET", &format!("/inbox/{iid}"), None))
+        .await
+        .unwrap();
+    assert_eq!(body_json(res).await["signals"][0]["source"], "sentry");
+    // Missing item → 404 through the shared error mapping.
+    let res = app
+        .clone()
+        .oneshot(request("GET", "/inbox/999", None))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+
+    // Start a triage session from the item over HTTP.
+    let from = serde_json::json!({
+        "item_id": iid,
+        "harness": "gemini-cli",
+        "repo_root": repo,
+        "command_override": crate::pty::CommandSpec::new("sh").arg("-c").arg("true"),
+    });
+    let res = app
+        .clone()
+        .oneshot(request("POST", "/sessions/from-inbox", Some(from)))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::CREATED);
+    let meta = body_json(res).await;
+    assert_eq!(meta["inbox_item_id"], iid);
+    let sid = meta["id"].as_str().unwrap().to_string();
+
+    // Accepting again is a 409 (someone already took it via the launch).
+    let res = app
+        .clone()
+        .oneshot(request(
+            "POST",
+            &format!("/inbox/{iid}/accept"),
+            Some(serde_json::json!({})),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+
+    // Dismiss: bad reason → 400; a fresh item dismisses cleanly.
+    app.clone()
+        .oneshot(request(
+            "POST",
+            "/signals",
+            Some(serde_json::json!({ "source": "ci", "kind": "regression",
+                "severity": "low", "title": "noise" })),
+        ))
+        .await
+        .unwrap();
+    let res = app
+        .clone()
+        .oneshot(request("GET", "/inbox?status=new", None))
+        .await
+        .unwrap();
+    let noise = body_json(res).await["items"][0]["id"].as_i64().unwrap();
+    let res = app
+        .clone()
+        .oneshot(request(
+            "POST",
+            &format!("/inbox/{noise}/dismiss"),
+            Some(serde_json::json!({ "reason": "meh" })),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    let res = app
+        .clone()
+        .oneshot(request(
+            "POST",
+            &format!("/inbox/{noise}/dismiss"),
+            Some(serde_json::json!({ "reason": "duplicate" })),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    // A fresh item accepts cleanly over HTTP (attributed locally).
+    app.clone()
+        .oneshot(request(
+            "POST",
+            "/signals",
+            Some(serde_json::json!({ "source": "ci", "kind": "ticket",
+                "severity": "low", "title": "take me" })),
+        ))
+        .await
+        .unwrap();
+    let res = app
+        .clone()
+        .oneshot(request("GET", "/inbox?status=new", None))
+        .await
+        .unwrap();
+    let fresh = body_json(res).await["items"][0]["id"].as_i64().unwrap();
+    let res = app
+        .clone()
+        .oneshot(request(
+            "POST",
+            &format!("/inbox/{fresh}/accept"),
+            Some(serde_json::json!({})),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(body_json(res).await["status"], "accepted");
+
+    // Outcome recording over HTTP: gh disabled → recorded:false with the
+    // reason; a non-inbox session → 502-style workspace error.
+    std::env::set_var("OPENADE_GITHUB_MEMORY", "0");
+    let res = app
+        .clone()
+        .oneshot(request(
+            "POST",
+            &format!("/sessions/{sid}/inbox-outcome"),
+            Some(serde_json::json!({})),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let body = body_json(res).await;
+    assert_eq!(body["recorded"], false);
+    assert!(body["note"].as_str().unwrap().contains("gh CLI"));
+    std::env::remove_var("OPENADE_GITHUB_MEMORY");
+    let plain = create_test_session(&app, &repo, "true").await;
+    let res = app
+        .clone()
+        .oneshot(request(
+            "POST",
+            &format!("/sessions/{}/inbox-outcome", plain["id"].as_str().unwrap()),
+            Some(serde_json::json!({})),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_GATEWAY);
+
+    // Remote-down: point the daemon at a dead server — every inbox route
+    // degrades to 502 with the reason.
+    std::env::set_var(crate::workspace::SERVER_URL_ENV, "http://127.0.0.1:1");
+    std::env::set_var(crate::workspace::SERVER_TOKEN_ENV, "oadk_x");
+    std::env::set_var(crate::workspace::SERVER_WORKSPACE_ENV, "1");
+    let res = app
+        .clone()
+        .oneshot(request("GET", "/inbox", None))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_GATEWAY);
+    for var in [
+        crate::workspace::SERVER_URL_ENV,
+        crate::workspace::SERVER_TOKEN_ENV,
+        crate::workspace::SERVER_WORKSPACE_ENV,
+    ] {
+        std::env::remove_var(var);
+    }
+}

@@ -465,3 +465,217 @@ fn inbox_survives_reopening_an_existing_database() {
     assert_eq!(detail.signals[0].evidence, serde_json::json!([]));
     assert_eq!(detail.signals[0].join_keys, serde_json::json!({}));
 }
+
+#[test]
+fn inbox_db_faults_surface_as_errors_at_every_stage() {
+    // Real fault injection: RAISE(ABORT) triggers make individual
+    // statements inside the ingest/decide/outcome transactions fail, so
+    // every error branch is a branch that has actually run.
+    let (_tmp, store) = store();
+    let a = store
+        .ingest_signal(DEFAULT_ORG, &sig("sentry", "seed", Some(10)))
+        .unwrap();
+
+    // item_signals insert fails mid-ingest (fresh fingerprint).
+    store
+        .lock()
+        .execute_batch(
+            "CREATE TRIGGER boom_links BEFORE INSERT ON item_signals
+             BEGIN SELECT RAISE(ABORT, 'links boom'); END;",
+        )
+        .unwrap();
+    assert!(matches!(
+        store.ingest_signal(DEFAULT_ORG, &sig("sentry", "fresh", Some(1))),
+        Err(StoreError::Db(_))
+    ));
+    store
+        .lock()
+        .execute_batch("DROP TRIGGER boom_links;")
+        .unwrap();
+
+    // The escalation reopen UPDATE fails on a dismissed item's 3× return.
+    store
+        .dismiss_item(
+            DEFAULT_ORG,
+            a.item_id,
+            crate::signal::DismissReason::WontFix,
+            "casey",
+        )
+        .unwrap();
+    store
+        .lock()
+        .execute_batch(
+            "CREATE TRIGGER boom_reopen BEFORE UPDATE OF status ON inbox_items
+             BEGIN SELECT RAISE(ABORT, 'reopen boom'); END;",
+        )
+        .unwrap();
+    assert!(matches!(
+        store.ingest_signal(DEFAULT_ORG, &sig("sentry", "seed", Some(30))),
+        Err(StoreError::Db(_))
+    ));
+    store
+        .lock()
+        .execute_batch("DROP TRIGGER boom_reopen;")
+        .unwrap();
+
+    // decide() fails when the guarded UPDATE itself errors.
+    let b = store
+        .ingest_signal(DEFAULT_ORG, &sig("sentry", "second", Some(1)))
+        .unwrap();
+    store
+        .lock()
+        .execute_batch(
+            "CREATE TRIGGER boom_decide BEFORE UPDATE OF decided_by ON inbox_items
+             BEGIN SELECT RAISE(ABORT, 'decide boom'); END;",
+        )
+        .unwrap();
+    assert!(matches!(
+        store.accept_item(DEFAULT_ORG, b.item_id, "casey"),
+        Err(StoreError::Db(_))
+    ));
+    store
+        .lock()
+        .execute_batch("DROP TRIGGER boom_decide;")
+        .unwrap();
+
+    // record_outcome fails on insert; outcomes_for_fingerprints fails when
+    // the outcomes table is gone entirely.
+    store
+        .lock()
+        .execute_batch(
+            "CREATE TRIGGER boom_outcome BEFORE INSERT ON outcomes
+             BEGIN SELECT RAISE(ABORT, 'outcome boom'); END;",
+        )
+        .unwrap();
+    assert!(matches!(
+        store.record_outcome(DEFAULT_ORG, b.item_id, "merged", None, None),
+        Err(StoreError::Db(_))
+    ));
+    store
+        .lock()
+        .execute_batch("DROP TRIGGER boom_outcome;")
+        .unwrap();
+    store
+        .lock()
+        .execute_batch("ALTER TABLE outcomes RENAME TO outcomes_gone;")
+        .unwrap();
+    assert!(matches!(
+        store.outcomes_for_fingerprints(DEFAULT_ORG, &["sentry:00".into()]),
+        Err(StoreError::Db(_))
+    ));
+}
+
+#[test]
+fn open_rejects_a_database_where_sessions_is_not_a_table() {
+    // The verdict migration ALTERs `sessions`; anything but the benign
+    // duplicate-column case must surface, not be swallowed.
+    let tmp = tempfile::tempdir().unwrap();
+    {
+        let conn = rusqlite::Connection::open(tmp.path().join("server.db")).unwrap();
+        conn.execute_batch("CREATE VIEW sessions AS SELECT 1 AS id;")
+            .unwrap();
+    }
+    assert!(matches!(Store::open(tmp.path()), Err(StoreError::Db(_))));
+}
+
+#[test]
+fn poisoned_columns_surface_as_db_errors_not_panics() {
+    let (_tmp, store) = store();
+    // Signal upsert itself can fail (trigger on signals).
+    store
+        .lock()
+        .execute_batch(
+            "CREATE TRIGGER boom_signals BEFORE INSERT ON signals
+             BEGIN SELECT RAISE(ABORT, 'signals boom'); END;",
+        )
+        .unwrap();
+    assert!(matches!(
+        store.ingest_signal(DEFAULT_ORG, &sig("sentry", "never", Some(1))),
+        Err(StoreError::Db(_))
+    ));
+    store
+        .lock()
+        .execute_batch("DROP TRIGGER boom_signals;")
+        .unwrap();
+    // Fresh-item insert can fail (trigger on inbox_items).
+    store
+        .lock()
+        .execute_batch(
+            "CREATE TRIGGER boom_items BEFORE INSERT ON inbox_items
+             BEGIN SELECT RAISE(ABORT, 'items boom'); END;",
+        )
+        .unwrap();
+    assert!(matches!(
+        store.ingest_signal(DEFAULT_ORG, &sig("sentry", "half", Some(1))),
+        Err(StoreError::Db(_))
+    ));
+    store
+        .lock()
+        .execute_batch("DROP TRIGGER boom_items;")
+        .unwrap();
+
+    let a = store
+        .ingest_signal(DEFAULT_ORG, &sig("sentry", "ok", Some(10)))
+        .unwrap();
+    store
+        .dismiss_item(
+            DEFAULT_ORG,
+            a.item_id,
+            crate::signal::DismissReason::WontFix,
+            "casey",
+        )
+        .unwrap();
+
+    // SQLite is dynamically typed: a REAL smuggled into affected_count
+    // makes the escalation SUM unreadable as an integer.
+    store
+        .lock()
+        .execute("UPDATE signals SET affected_count = 12.5", [])
+        .unwrap();
+    assert!(matches!(
+        store.ingest_signal(DEFAULT_ORG, &sig("sentry", "ok", None)),
+        Err(StoreError::Db(_))
+    ));
+    store
+        .lock()
+        .execute("UPDATE signals SET affected_count = 10", [])
+        .unwrap();
+
+    // A blob smuggled into status (affinity never converts blobs) breaks
+    // the decide/record_outcome guards cleanly.
+    store
+        .lock()
+        .execute("UPDATE inbox_items SET status = x'00ff'", [])
+        .unwrap();
+    assert!(matches!(
+        store.accept_item(DEFAULT_ORG, a.item_id, "casey"),
+        Err(StoreError::Db(_))
+    ));
+    assert!(matches!(
+        store.record_outcome(DEFAULT_ORG, a.item_id, "merged", None, None),
+        Err(StoreError::Db(_))
+    ));
+    store
+        .lock()
+        .execute("UPDATE inbox_items SET status = 'new'", [])
+        .unwrap();
+
+    // dismiss_item propagates a failure from its outcome write, after the
+    // decide succeeded.
+    store
+        .lock()
+        .execute_batch(
+            "CREATE TRIGGER boom_dismiss_outcome BEFORE INSERT ON outcomes
+             BEGIN SELECT RAISE(ABORT, 'outcome boom'); END;",
+        )
+        .unwrap();
+    assert!(matches!(
+        store.dismiss_item(
+            DEFAULT_ORG,
+            a.item_id,
+            crate::signal::DismissReason::Duplicate,
+            "sam"
+        ),
+        Err(StoreError::Db(_))
+    ));
+}

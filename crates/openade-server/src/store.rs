@@ -504,57 +504,48 @@ impl Store {
         let now = chrono::Utc::now().to_rfc3339();
         let mut conn = self.lock();
         let tx = conn.transaction()?;
-        let inserted = {
-            let n = tx.execute(
-                "INSERT INTO signals (org_id, source, source_ref, kind, severity, title, body,
-                                      evidence, fingerprint, join_keys, raw, affected_count,
-                                      first_seen, last_seen)
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?13)
-                 ON CONFLICT (org_id, fingerprint) DO UPDATE SET
-                    last_seen = excluded.last_seen,
-                    severity = excluded.severity,
-                    title = excluded.title,
-                    body = excluded.body,
-                    evidence = excluded.evidence,
-                    affected_count = COALESCE(excluded.affected_count, signals.affected_count)",
-                rusqlite::params![
-                    org,
-                    sig.source,
-                    sig.source_ref,
-                    sig.kind.as_str(),
-                    sig.severity.as_str(),
-                    sig.title,
-                    sig.body,
-                    serde_json::to_string(&sig.evidence).expect("evidence serializes"),
-                    fp,
-                    serde_json::to_string(&sig.join_keys).expect("join keys serialize"),
-                    sig.raw.to_string(),
-                    sig.affected_count,
-                    now,
-                ],
-            )?;
-            // rusqlite reports 1 for both paths; distinguish via first_seen.
-            n == 1
-                && tx.query_row(
-                    "SELECT first_seen = last_seen FROM signals
-                     WHERE org_id = ?1 AND fingerprint = ?2",
-                    rusqlite::params![org, fp],
-                    |r| r.get::<_, bool>(0),
-                )?
-        };
-        tx.execute(
+        // One statement: upsert and report whether this was first sight
+        // (insert keeps first_seen == last_seen; an update moves last_seen).
+        let inserted: bool = tx.query_row(
+            "INSERT INTO signals (org_id, source, source_ref, kind, severity, title, body,
+                                  evidence, fingerprint, join_keys, raw, affected_count,
+                                  first_seen, last_seen)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?13)
+             ON CONFLICT (org_id, fingerprint) DO UPDATE SET
+                last_seen = excluded.last_seen,
+                severity = excluded.severity,
+                title = excluded.title,
+                body = excluded.body,
+                evidence = excluded.evidence,
+                affected_count = COALESCE(excluded.affected_count, signals.affected_count)
+             RETURNING first_seen = last_seen",
+            rusqlite::params![
+                org,
+                sig.source,
+                sig.source_ref,
+                sig.kind.as_str(),
+                sig.severity.as_str(),
+                sig.title,
+                sig.body,
+                serde_json::to_string(&sig.evidence).expect("evidence serializes"),
+                fp,
+                serde_json::to_string(&sig.join_keys).expect("join keys serialize"),
+                sig.raw.to_string(),
+                sig.affected_count,
+                now,
+            ],
+            |r| r.get(0),
+        )?;
+        let item_id: i64 = tx.query_row(
             "INSERT INTO inbox_items (org_id, fingerprint, title, severity, summary,
                                       created_at, updated_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)
              ON CONFLICT (org_id, fingerprint) DO UPDATE SET
                 title = excluded.title,
                 severity = excluded.severity,
-                updated_at = excluded.updated_at",
+                updated_at = excluded.updated_at
+             RETURNING id",
             rusqlite::params![org, fp, sig.title, sig.severity.as_str(), sig.body, now],
-        )?;
-        let item_id: i64 = tx.query_row(
-            "SELECT id FROM inbox_items WHERE org_id = ?1 AND fingerprint = ?2",
-            rusqlite::params![org, fp],
             |r| r.get(0),
         )?;
         tx.execute(
@@ -737,8 +728,26 @@ impl Store {
     ) -> Result<InboxItem, StoreError> {
         let now = chrono::Utc::now().to_rfc3339();
         {
+            use rusqlite::OptionalExtension;
             let conn = self.lock();
-            let n = conn.execute(
+            // Missing item vs. already-decided item are different errors.
+            let current: Option<String> = conn
+                .query_row(
+                    "SELECT status FROM inbox_items WHERE org_id = ?1 AND id = ?2",
+                    rusqlite::params![org, id],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            match current.as_deref() {
+                None => return Err(StoreError::NotFound),
+                Some("new") => {}
+                Some(_) => {
+                    return Err(StoreError::Conflict(format!(
+                        "item {id} was already decided"
+                    )))
+                }
+            }
+            conn.execute(
                 "UPDATE inbox_items SET status = ?3, dismiss_reason = ?4, decided_by = ?5,
                         decided_at = ?6, updated_at = ?6,
                         dismissal_affected_count = CASE WHEN ?3 = 'dismissed' THEN
@@ -750,19 +759,6 @@ impl Store {
                  WHERE org_id = ?1 AND id = ?2 AND status = 'new'",
                 rusqlite::params![org, id, status, reason, by, now],
             )?;
-            if n == 0 {
-                // Missing item vs. already-decided item are different errors.
-                let exists: bool = conn.query_row(
-                    "SELECT COUNT(*) > 0 FROM inbox_items WHERE org_id = ?1 AND id = ?2",
-                    rusqlite::params![org, id],
-                    |r| r.get(0),
-                )?;
-                return Err(if exists {
-                    StoreError::Conflict(format!("item {id} was already decided"))
-                } else {
-                    StoreError::NotFound
-                });
-            }
         }
         Ok(self.inbox_item(org, id)?.item)
     }
@@ -777,13 +773,16 @@ impl Store {
         pr_url: Option<&str>,
         note: Option<&str>,
     ) -> Result<bool, StoreError> {
+        use rusqlite::OptionalExtension;
         let conn = self.lock();
-        let exists: bool = conn.query_row(
-            "SELECT COUNT(*) > 0 FROM inbox_items WHERE org_id = ?1 AND id = ?2",
-            rusqlite::params![org, item_id],
-            |r| r.get(0),
-        )?;
-        if !exists {
+        let exists: Option<String> = conn
+            .query_row(
+                "SELECT status FROM inbox_items WHERE org_id = ?1 AND id = ?2",
+                rusqlite::params![org, item_id],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if exists.is_none() {
             return Err(StoreError::NotFound);
         }
         let now = chrono::Utc::now().to_rfc3339();
