@@ -322,6 +322,68 @@ impl HarnessAdapter for CopilotAdapter {
     }
 }
 
+/// OpenCode (`opencode`).
+pub struct OpenCodeAdapter;
+
+impl HarnessAdapter for OpenCodeAdapter {
+    fn harness(&self) -> Harness {
+        Harness::OpenCode
+    }
+
+    fn launch_command(&self, req: &LaunchRequest) -> CommandSpec {
+        let mut spec = CommandSpec::new(self.harness().program());
+        if let Some(prompt) = &req.prompt {
+            // Verify: `opencode --prompt <text>` starts the TUI with the
+            // prompt pre-filled (Phase 0 spike).
+            spec = spec.arg("--prompt").arg(prompt.clone());
+        }
+        spec
+    }
+
+    fn resume_command(&self, session_ref: &str) -> CommandSpec {
+        // Verify: `opencode --session <session-id>` reopens a session
+        // (Phase 0 spike, PRD Q1).
+        CommandSpec::new(self.harness().program())
+            .arg("--session")
+            .arg(session_ref)
+    }
+
+    fn mcp_registrations(
+        &self,
+        _worktree: &Path,
+        servers: &[McpServerSpec],
+    ) -> Vec<McpRegistration> {
+        // Project-scoped opencode.json in the worktree root; OpenCode's MCP
+        // block uses a command *array* for local servers, not command+args.
+        let mut map = serde_json::Map::new();
+        for s in servers {
+            let entry = match &s.transport {
+                McpTransport::Stdio { command, args } => {
+                    let mut argv = vec![command.clone()];
+                    argv.extend(args.iter().cloned());
+                    serde_json::json!({ "type": "local", "command": argv })
+                }
+                McpTransport::Http { url } => {
+                    serde_json::json!({ "type": "remote", "url": url })
+                }
+            };
+            map.insert(s.name.clone(), entry);
+        }
+        let snippet = serde_json::json!({ "mcp": serde_json::Value::Object(map) });
+        vec![McpRegistration {
+            scope: RegistrationScope::Project,
+            file: PathBuf::from("opencode.json"),
+            format: "json".into(),
+            snippet: serde_json::to_string_pretty(&snippet).expect("static json"),
+            note: "Project-scoped OpenCode config; loaded from the worktree root.".into(),
+        }]
+    }
+
+    fn transcript_hint(&self, home: &Path) -> PathBuf {
+        home.join(".local").join("share").join("opencode")
+    }
+}
+
 /// The adapter for a harness.
 pub fn adapter_for(harness: Harness) -> &'static dyn HarnessAdapter {
     match harness {
@@ -329,6 +391,7 @@ pub fn adapter_for(harness: Harness) -> &'static dyn HarnessAdapter {
         Harness::CodexCli => &CodexAdapter,
         Harness::GeminiCli => &GeminiAdapter,
         Harness::CopilotCli => &CopilotAdapter,
+        Harness::OpenCode => &OpenCodeAdapter,
     }
 }
 
