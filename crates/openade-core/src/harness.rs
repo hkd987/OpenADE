@@ -21,15 +21,19 @@ pub enum Harness {
     GeminiCli,
     /// GitHub's Copilot CLI (`copilot`).
     CopilotCli,
+    /// SST's OpenCode CLI (`opencode`).
+    #[serde(rename = "opencode")]
+    OpenCode,
 }
 
 impl Harness {
     /// All supported harnesses.
-    pub const ALL: [Harness; 4] = [
+    pub const ALL: [Harness; 5] = [
         Harness::ClaudeCode,
         Harness::CodexCli,
         Harness::GeminiCli,
         Harness::CopilotCli,
+        Harness::OpenCode,
     ];
 
     /// Stable machine identifier (matches the serde representation).
@@ -39,6 +43,7 @@ impl Harness {
             Harness::CodexCli => "codex-cli",
             Harness::GeminiCli => "gemini-cli",
             Harness::CopilotCli => "copilot-cli",
+            Harness::OpenCode => "opencode",
         }
     }
 
@@ -49,6 +54,7 @@ impl Harness {
             Harness::CodexCli => "Codex CLI",
             Harness::GeminiCli => "Gemini CLI",
             Harness::CopilotCli => "Copilot CLI",
+            Harness::OpenCode => "OpenCode",
         }
     }
 
@@ -59,6 +65,7 @@ impl Harness {
             Harness::CodexCli => "codex",
             Harness::GeminiCli => "gemini",
             Harness::CopilotCli => "copilot",
+            Harness::OpenCode => "opencode",
         }
     }
 
@@ -74,6 +81,8 @@ impl Harness {
             // Copilot CLI reads the same AGENTS.md convention as Codex.
             Harness::GeminiCli => "GEMINI.md",
             Harness::CopilotCli => "AGENTS.md",
+            // OpenCode reads the same AGENTS.md convention as Codex.
+            Harness::OpenCode => "AGENTS.md",
         }
     }
 }
@@ -87,7 +96,7 @@ impl fmt::Display for Harness {
 /// Error returned when parsing an unknown harness identifier.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error(
-    "unknown harness id: {0:?} (expected one of: claude-code, codex-cli, gemini-cli, copilot-cli)"
+    "unknown harness id: {0:?} (expected one of: claude-code, codex-cli, gemini-cli, copilot-cli, opencode)"
 )]
 pub struct UnknownHarness(pub String);
 
@@ -100,6 +109,7 @@ impl FromStr for Harness {
             "codex-cli" | "codex" => Ok(Harness::CodexCli),
             "gemini-cli" | "gemini" => Ok(Harness::GeminiCli),
             "copilot-cli" | "copilot" => Ok(Harness::CopilotCli),
+            "opencode" => Ok(Harness::OpenCode),
             other => Err(UnknownHarness(other.to_string())),
         }
     }

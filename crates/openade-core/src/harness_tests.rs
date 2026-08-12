@@ -17,6 +17,7 @@ fn short_aliases_parse() {
     assert_eq!("codex".parse::<Harness>().unwrap(), Harness::CodexCli);
     assert_eq!("gemini".parse::<Harness>().unwrap(), Harness::GeminiCli);
     assert_eq!("copilot".parse::<Harness>().unwrap(), Harness::CopilotCli);
+    assert_eq!("opencode".parse::<Harness>().unwrap(), Harness::OpenCode);
     let err = "cursor".parse::<Harness>().unwrap_err();
     assert!(err.to_string().contains("cursor"));
 }
@@ -28,12 +29,16 @@ fn display_and_names() {
     assert_eq!(Harness::GeminiCli.program(), "gemini");
     assert_eq!(Harness::CopilotCli.display_name(), "Copilot CLI");
     assert_eq!(Harness::CopilotCli.program(), "copilot");
+    assert_eq!(Harness::OpenCode.display_name(), "OpenCode");
+    assert_eq!(Harness::OpenCode.program(), "opencode");
+    assert_eq!(Harness::OpenCode.id(), "opencode");
 }
 
 #[test]
 fn rules_filenames_cover_the_three_conventions() {
-    // Codex and Copilot intentionally share the AGENTS.md convention; the
-    // three distinct filenames are the complete set rules materialize to.
+    // Codex, Copilot, and OpenCode intentionally share the AGENTS.md
+    // convention; the three distinct filenames are the complete set rules
+    // materialize to.
     let names: std::collections::HashSet<_> =
         Harness::ALL.iter().map(|h| h.rules_filename()).collect();
     assert_eq!(
@@ -44,6 +49,10 @@ fn rules_filenames_cover_the_three_conventions() {
     );
     assert_eq!(
         Harness::CopilotCli.rules_filename(),
+        Harness::CodexCli.rules_filename()
+    );
+    assert_eq!(
+        Harness::OpenCode.rules_filename(),
         Harness::CodexCli.rules_filename()
     );
 }

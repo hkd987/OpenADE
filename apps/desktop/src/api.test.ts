@@ -37,13 +37,16 @@ describe("api client", () => {
       "codex-cli",
       "gemini-cli",
       "copilot-cli",
+      "opencode",
     ]);
     expect(HARNESSES.map((h) => h.vendor)).toEqual([
       "Anthropic",
       "OpenAI",
       "Google",
       "GitHub",
+      "SST",
     ]);
+    expect(harnessLabel("opencode")).toBe("OpenCode");
     expect(harnessLabel("gemini-cli")).toBe("Gemini CLI");
     expect(harnessLabel("unknown" as never)).toBe("unknown");
   });

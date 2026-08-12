@@ -3,7 +3,7 @@
 **An open, vendor-neutral agentic development environment.**
 
 OpenADE orchestrates parallel AI coding agent sessions — **Claude Code,
-Codex CLI, Gemini CLI, Copilot CLI** — in isolated Git worktrees from a
+Codex CLI, Gemini CLI, Copilot CLI, OpenCode** — in isolated Git worktrees from a
 single control surface,
 and grounds every session in organizational memory via **MCP**: a
 **Backstage** software catalog (ownership, dependencies, APIs, ADRs,
@@ -104,7 +104,7 @@ cargo install --path crates/openade-server   # team workspace host only
 ```
 
 The harness CLIs themselves are bring-your-own: install and authenticate
-`claude`, `codex`, `gemini`, and/or `copilot` through each vendor's normal
+`claude`, `codex`, `gemini`, `copilot`, and/or `opencode` through each vendor's normal
 flow. OpenADE never touches their credentials. (Adapter flag mappings are
 verified against current CLI releases via the
 [Phase 0 spike](docs/phase-0-spike.md) checklist — these tools change
@@ -183,6 +183,59 @@ instead; [docs/multiplayer.md](docs/multiplayer.md) covers the
 `openade-server`-side knobs),
 `VITE_OPENADE_DAEMON_URL` (UI → daemon).
 
+## Multiplayer (self-hosted)
+
+Give your whole team one shared memory of every agent session. Multiplayer
+ships as its own binary in this repo — **`openade-server`** — that any
+machine on your network can host; each member's OpenADE connects to it
+with a revocable token.
+
+- **Share a session** — press **Share** on any session and its
+  harness-neutral record (summary, knowledge artifact, transcript) is
+  uploaded to the team workspace. Sharing is manual and per-session:
+  nothing leaves a machine implicitly.
+- **Browse the team's history** — the **Team** view lists every shared
+  session (who shared it, which harness and repo/entity, when, one-line
+  summary) with a read-only artifact + transcript viewer.
+- **Pick up any session, anytime, in any harness** — choose a harness and
+  a local clone, press **Pick up**, and a new local session starts where
+  the shared one left off: the record is rendered into that harness's own
+  rules file, a `.openade/pickup.md` takeover doc, and its native prompt
+  convention. A session shared from Claude Code picks up in OpenCode.
+- **Memory compounds** — shared sessions matching an entity feed the next
+  session's context bundle automatically, and everything degrades
+  gracefully when the server is unreachable.
+
+**Install the server:** download the tarball for your platform from
+[**GitHub Releases (latest)**](https://github.com/hkd987/OpenADE/releases/latest)
+— `openade-server` is inside every release archive next to
+`openade-daemon` — or build it with
+`cargo install --path crates/openade-server`. Then:
+
+```sh
+# on the host machine (state = one SQLite file under ~/.openade-server)
+OPENADE_SERVER_ADMIN_TOKEN=$(openssl rand -hex 24) openade-server
+
+# once, as admin: create the workspace and mint a token per member
+curl -X POST http://host:7500/workspaces -H "Authorization: Bearer $ADMIN" \
+  -H 'content-type: application/json' -d '{"title":"Acme Eng","description":""}'
+curl -X POST http://host:7500/tokens -H "Authorization: Bearer $ADMIN" \
+  -H 'content-type: application/json' -d '{"name":"casey"}'
+```
+
+Each member pastes the server URL, their member token, and the workspace
+id into **⚙ Settings → Multiplayer** — no restart needed. The full
+self-host guide (env knobs, API table, security notes) is in
+[docs/multiplayer.md](docs/multiplayer.md). Prefer not to host it
+yourself? A managed option is planned; self-hosting stays fully supported.
+
+Browsing the team workspace and picking a shared session up in a
+different harness:
+
+![Team view with shared sessions](docs/img/team-view.png)
+
+![Picking up a shared session](docs/img/team-pickup.png)
+
 ## Architecture
 
 ```
@@ -194,7 +247,8 @@ instead; [docs/multiplayer.md](docs/multiplayer.md) covers the
 │ Session daemon (Rust)                               │  crates/openade-daemon
 │  • PTY host — sessions survive window close         │
 │  • Git worktree isolation per task                  │
-│  • Harness adapters (claude/codex/gemini/copilot)   │
+│  • Harness adapters (claude/codex/gemini/           │
+│    copilot/opencode)                                │
 │  • Context bundles + knowledge artifacts            │
 │  • Transcript recorder (JSONL + SQLite index)       │
 └───────┬─────────────────────────────┬───────────────┘
@@ -236,9 +290,9 @@ browser).
 ## Testing
 
 ```sh
-cargo test                                        # 180 Rust tests (real git, real PTYs, mock Backstage, fake gh, a real workspace server, fault injection)
+cargo test                                        # 181 Rust tests (real git, real PTYs, mock Backstage, fake gh, a real workspace server, fault injection)
 cd apps/desktop && npm test                       # UI unit tests (vitest)
-cd apps/desktop && npm run e2e                    # 20 Playwright flows: real daemon + real openade-server + mock Backstage + gh shim + real Chromium
+cd apps/desktop && npm run e2e                    # 21 Playwright flows: real daemon + real openade-server + mock Backstage + gh shim + real Chromium
 ```
 
 Product-code line coverage is 100% on both the Rust workspace and the UI —

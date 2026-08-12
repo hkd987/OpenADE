@@ -109,12 +109,14 @@ button presses — rather than through the HTTP API:
 | 45 | Share (release daemon) | Release `openade-daemon` connected via `OPENADE_SERVER_URL`/`_TOKEN`/`_WORKSPACE` (config reports `workspace_configured: true`); launched "manual retry fix" (claude shim) and `POST /sessions/{id}/share` uploaded the harness-neutral record — the server lists it with `shared_by: casey`, `harness: claude-code`, summary, markdown, and 2 transcript events |
 | 46 | Cross-harness pickup | `POST /sessions/pickup {workspace_session_id: 1, harness: copilot-cli}` started a NEW running session in its own worktree: `.openade/pickup.md` carries "Picking up: manual retry fix", "Shared by **casey** (originally run on claude-code)", summary + full record + original prompts; the scrollback shows the copilot shim running with the takeover prompt pointing at pickup.md |
 | 47 | Multiplayer degradation | Killed the server: `GET /workspace/sessions` and share both answer 502 with `workspace server unreachable: …`; the daemon itself stays healthy and local sessions keep working |
+| 48 | OpenCode harness (release binary) | Release daemon + `opencode` shim on PATH: launched an `opencode` session with a prompt — PTY runs the OpenCode CLI with its `--prompt` convention (`--prompt tighten retries` in the scrollback), rules materialize to `AGENTS.md` in the worktree, and the session reports `harness: opencode` / `running` |
+| 49 | Handoff into OpenCode | A running Claude Code session handed off to `opencode`: the new session runs the OpenCode shim in the SAME worktree with the takeover prompt pointing at `.openade/handoff.md`; real-CLI flag mapping (`--prompt`, `--session`, project-scoped `opencode.json` MCP config) gated on the Phase 0 spike like the other harnesses |
 
 ![Artifact banner with the shared team memory push](img/artifact-shared-memory.png)
 
 ## Not verifiable in this environment
 
-- The real `claude` / `codex` / `gemini` / `copilot` CLIs (no vendor
+- The real `claude` / `codex` / `gemini` / `copilot` / `opencode` CLIs (no vendor
   credentials in the container) — adapter flags remain gated on the
   [Phase 0 spike](phase-0-spike.md) run on a developer machine.
 - A production Backstage instance — the REST surface was mocked

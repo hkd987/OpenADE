@@ -375,3 +375,38 @@ test("docs parity: file viewer, rules, skills, main checkout, goal box, PRs", as
     page.locator(".session-card", { hasText: "tighten the retry budget" }),
   ).toBeVisible();
 });
+
+test("an OpenCode session launches with its own CLI conventions", async ({
+  page,
+  request,
+}) => {
+  await page.goto("/");
+  await page.getByTestId("toggle-new-session").click();
+  await page.getByTestId("ns-title").fill("opencode task");
+  await page.getByTestId("ns-harness").selectOption("opencode");
+  await page.getByTestId("ns-repo").fill(repo);
+  await page.getByTestId("ns-prompt").fill("polish the retries");
+  await page.getByTestId("ns-submit").click();
+
+  // The opencode shim runs in the PTY with the adapter's prompt flag, and
+  // the card is attributed to the harness.
+  await expect(page.getByTestId("terminal-view")).toContainText(
+    "opencode-shim started",
+  );
+  await expect(page.getByTestId("terminal-view")).toContainText(
+    "--prompt polish the retries",
+  );
+  await expect(
+    page.locator(".session-card", { hasText: "opencode task" }),
+  ).toContainText("OpenCode");
+
+  // Rules materialized to OpenCode's AGENTS.md convention in its worktree.
+  const sessions = await (await request.get(`${daemon}/sessions`)).json();
+  const oc = sessions.sessions.find(
+    (s: { title: string }) => s.title === "opencode task",
+  );
+  expect(oc.harness).toBe("opencode");
+  expect(
+    fs.existsSync(path.join(oc.worktree_path as string, "AGENTS.md")),
+  ).toBeTruthy();
+});
