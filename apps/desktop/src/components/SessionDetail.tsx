@@ -10,6 +10,7 @@ import {
   publishArtifact,
   getFileContent,
   getSkills,
+  recordInboxOutcome,
   SessionMeta,
   shareSession,
   SkillInfo,
@@ -39,6 +40,8 @@ export function SessionDetail({
   const [viewing, setViewing] = useState<{ path: string; content: string } | null>(null);
   const [artifact, setArtifact] = useState<ArtifactInfo | null>(null);
   const [shared, setShared] = useState<WorkspaceSession | null>(null);
+  const [outcome, setOutcome] = useState<string | null>(null);
+  const [outcomeTried, setOutcomeTried] = useState(false);
   const [handoffTo, setHandoffTo] = useState<Harness>("gemini-cli");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -48,8 +51,30 @@ export function SessionDetail({
     setShared(null);
     setError(null);
     setViewing(null);
+    setOutcome(null);
+    setOutcomeTried(false);
     setTab("terminal");
   }, [session.id]);
+
+  // Triage sessions record what reality decided the moment they finish:
+  // the daemon reads the branch's PR fate via the user's own gh CLI and
+  // the write is idempotent, so one automatic attempt per session is safe.
+  const terminal = session.state === "completed" || session.state === "failed";
+  useEffect(() => {
+    if (session.inbox_item_id === undefined || !terminal || outcomeTried) {
+      return;
+    }
+    setOutcomeTried(true);
+    recordInboxOutcome(session.id)
+      .then((r) =>
+        setOutcome(
+          r.recorded
+            ? `outcome recorded: ${r.kind}`
+            : (r.note ?? "no outcome yet"),
+        ),
+      )
+      .catch((e) => setOutcome(e instanceof Error ? e.message : String(e)));
+  }, [session.id, session.inbox_item_id, terminal, outcomeTried]);
 
   useEffect(() => {
     if (tab === "diff") {
@@ -137,6 +162,24 @@ export function SessionDetail({
           >
             Artifact
           </button>
+          {session.inbox_item_id !== undefined && (
+            <button
+              disabled={busy}
+              onClick={() =>
+                act(async () => {
+                  const r = await recordInboxOutcome(session.id);
+                  setOutcome(
+                    r.recorded
+                      ? `outcome recorded: ${r.kind}`
+                      : (r.note ?? "no outcome yet"),
+                  );
+                })
+              }
+              data-testid="outcome-button"
+            >
+              Record outcome
+            </button>
+          )}
           {workspaceConfigured && (
             <button
               disabled={busy}
@@ -193,6 +236,11 @@ export function SessionDetail({
         </div>
       )}
 
+      {outcome !== null && (
+        <div className="artifact-banner" data-testid="outcome-banner">
+          Outcome memory: {outcome}
+        </div>
+      )}
       {shared !== null && (
         <div className="artifact-banner" data-testid="share-banner">
           Shared to the team workspace as session <code>#{shared.id}</code> —

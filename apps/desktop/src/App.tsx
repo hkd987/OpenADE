@@ -3,11 +3,13 @@ import {
   createSession,
   DaemonConfig,
   getConfig,
+  listInbox,
   listSessions,
   projectName,
   SessionMeta,
 } from "./api";
 import { CommandPalette } from "./components/CommandPalette";
+import { InboxView } from "./components/InboxView";
 import { NewSessionForm } from "./components/NewSessionForm";
 import { Onboarding } from "./components/Onboarding";
 import { ProjectsView } from "./components/ProjectsView";
@@ -25,9 +27,10 @@ export default function App() {
   const [formRepo, setFormRepo] = useState<string | undefined>(undefined);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [config, setConfig] = useState<DaemonConfig | null>(null);
-  const [view, setView] = useState<"sessions" | "projects" | "team">(
-    "sessions",
-  );
+  const [view, setView] = useState<
+    "sessions" | "projects" | "team" | "inbox"
+  >("sessions");
+  const [inboxCount, setInboxCount] = useState(0);
   const [layout, setLayout] = useState<"cards" | "compact">("cards");
   const [showPalette, setShowPalette] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
@@ -39,6 +42,14 @@ export default function App() {
       setDaemonError(null);
     } catch (err) {
       setDaemonError(err instanceof Error ? err.message : String(err));
+    }
+    // The inbox badge rides the same poll; a broken inbox never blocks
+    // the session grid.
+    try {
+      const { items } = await listInbox("new");
+      setInboxCount(items.length);
+    } catch {
+      setInboxCount(0);
     }
   }, []);
 
@@ -166,6 +177,18 @@ export default function App() {
           >
             Team
           </button>
+          <button
+            className={`view-pill ${view === "inbox" ? "active" : ""}`}
+            onClick={() => setView("inbox")}
+            data-testid="view-inbox"
+          >
+            Inbox
+            {inboxCount > 0 && (
+              <span className="inbox-badge" data-testid="inbox-count">
+                {inboxCount}
+              </span>
+            )}
+          </button>
         </nav>
         <span className="header-spacer" />
         <button
@@ -215,7 +238,16 @@ export default function App() {
         />
       )}
 
-      {view === "team" ? (
+      {view === "inbox" ? (
+        <InboxView
+          repos={projects.map((p) => p.repoRoot)}
+          onLaunched={(session) => {
+            setSelected(session.id);
+            setView("sessions");
+            void refresh();
+          }}
+        />
+      ) : view === "team" ? (
         <TeamView
           configured={config?.workspace_configured === true}
           repos={projects.map((p) => p.repoRoot)}

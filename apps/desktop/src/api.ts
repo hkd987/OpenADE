@@ -76,6 +76,7 @@ export interface SessionMeta {
   branch?: string;
   base_commit?: string;
   entity_ref?: string;
+  inbox_item_id?: number;
   state: SessionState;
   created_at: string;
   updated_at: string;
@@ -118,6 +119,93 @@ export interface ArtifactInfo {
   shared_repo?: string;
   /** Path of the document inside the shared memory repo. */
   shared_path?: string;
+}
+
+/** Signal severity, low → critical. */
+export type Severity = "low" | "medium" | "high" | "critical";
+
+/** A deep link into the tool a signal came from. */
+export interface EvidenceLink {
+  kind: "replay" | "stack_trace" | "ticket" | "issue" | "other";
+  label: string;
+  url: string;
+}
+
+/** Why an inbox item was dismissed — recorded in outcome memory. */
+export type DismissReason =
+  | "intended_behavior"
+  | "wont_fix"
+  | "duplicate"
+  | "bad_evidence";
+
+export const DISMISS_REASONS: {
+  id: DismissReason;
+  label: string;
+  kbd: string;
+}[] = [
+  { id: "intended_behavior", label: "Intended behavior", kbd: "1" },
+  { id: "wont_fix", label: "Won't fix", kbd: "2" },
+  { id: "duplicate", label: "Duplicate", kbd: "3" },
+  { id: "bad_evidence", label: "Bad evidence", kbd: "4" },
+];
+
+/** An inbox item: the triage unit. */
+export interface InboxItem {
+  id: number;
+  fingerprint: string;
+  title: string;
+  severity: Severity;
+  summary?: string;
+  status: "new" | "accepted" | "dismissed";
+  dismiss_reason?: DismissReason;
+  decided_by?: string;
+  decided_at?: string;
+  created_at: string;
+  updated_at: string;
+  affected_count?: number | null;
+  last_seen: string;
+}
+
+/** A stored signal behind an inbox item. */
+export interface StoredSignal {
+  id: number;
+  source: string;
+  source_ref: string;
+  kind: string;
+  severity: Severity;
+  title: string;
+  body: string;
+  evidence: EvidenceLink[];
+  fingerprint: string;
+  join_keys: Record<string, string>;
+  affected_count?: number | null;
+  first_seen: string;
+  last_seen: string;
+}
+
+/** What reality decided about an item's work. */
+export interface OutcomeRecord {
+  item_id: number;
+  kind: string;
+  occurred_at: string;
+  pr_url?: string;
+  note?: string;
+}
+
+export interface InboxItemDetail {
+  item: InboxItem;
+  signals: StoredSignal[];
+  outcomes: OutcomeRecord[];
+}
+
+/** Start a triage session from an inbox item. */
+export interface FromInboxRequest {
+  item_id: number;
+  harness: Harness;
+  repo_root: string;
+  checkout?: CheckoutMode;
+  /** Look without deciding — the item stays in the queue. */
+  investigate?: boolean;
 }
 
 /** A session shared to the team workspace (multiplayer). */
@@ -266,6 +354,47 @@ export function listProjects(): Promise<{ projects: string[] }> {
 
 export function publishArtifact(id: string): Promise<ArtifactInfo> {
   return request(`/sessions/${id}/artifact`, { method: "POST", body: "{}" });
+}
+
+export function listInbox(
+  status?: string,
+): Promise<{ items: InboxItem[] }> {
+  const query = status !== undefined ? `?status=${status}` : "";
+  return request(`/inbox${query}`);
+}
+
+export function getInboxItem(id: number): Promise<InboxItemDetail> {
+  return request(`/inbox/${id}`);
+}
+
+export function acceptInboxItem(id: number): Promise<InboxItem> {
+  return request(`/inbox/${id}/accept`, { method: "POST", body: "{}" });
+}
+
+export function dismissInboxItem(
+  id: number,
+  reason: DismissReason,
+): Promise<InboxItem> {
+  return request(`/inbox/${id}/dismiss`, {
+    method: "POST",
+    body: JSON.stringify({ reason }),
+  });
+}
+
+export function startFromInbox(req: FromInboxRequest): Promise<SessionMeta> {
+  return request("/sessions/from-inbox", {
+    method: "POST",
+    body: JSON.stringify(req),
+  });
+}
+
+export function recordInboxOutcome(
+  sessionId: string,
+): Promise<{ recorded: boolean; kind?: string; note?: string }> {
+  return request(`/sessions/${sessionId}/inbox-outcome`, {
+    method: "POST",
+    body: "{}",
+  });
 }
 
 export function shareSession(id: string): Promise<WorkspaceSession> {

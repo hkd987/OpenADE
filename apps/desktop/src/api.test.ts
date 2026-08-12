@@ -232,6 +232,59 @@ describe("api client", () => {
     });
   });
 
+  it("drives the inbox endpoints", async () => {
+    const fetch = mockFetch(200, {
+      items: [],
+      item: { id: 1 },
+      signals: [],
+      outcomes: [],
+      recorded: true,
+      id: 1,
+      status: "accepted",
+    });
+    const {
+      listInbox,
+      getInboxItem,
+      acceptInboxItem,
+      dismissInboxItem,
+      startFromInbox,
+      recordInboxOutcome,
+      DISMISS_REASONS,
+    } = await import("./api");
+    expect(DISMISS_REASONS.map((r) => r.id)).toEqual([
+      "intended_behavior",
+      "wont_fix",
+      "duplicate",
+      "bad_evidence",
+    ]);
+    await listInbox();
+    await listInbox("new");
+    await getInboxItem(7);
+    await acceptInboxItem(7);
+    await dismissInboxItem(7, "wont_fix");
+    await startFromInbox({
+      item_id: 7,
+      harness: "claude-code",
+      repo_root: "/repo",
+      investigate: true,
+    });
+    await recordInboxOutcome("abc");
+    const urls = fetch.mock.calls.map((c) => c[0] as string);
+    expect(urls[0]).toMatch(/\/inbox$/);
+    expect(urls[1]).toContain("/inbox?status=new");
+    expect(urls[2]).toContain("/inbox/7");
+    expect(urls[3]).toContain("/inbox/7/accept");
+    expect(urls[4]).toContain("/inbox/7/dismiss");
+    expect(urls[5]).toContain("/sessions/from-inbox");
+    expect(urls[6]).toContain("/sessions/abc/inbox-outcome");
+    const dismissInit = fetch.mock.calls[4][1] as RequestInit;
+    expect(JSON.parse(dismissInit.body as string)).toEqual({
+      reason: "wont_fix",
+    });
+    const fromInit = fetch.mock.calls[5][1] as RequestInit;
+    expect(JSON.parse(fromInit.body as string).investigate).toBe(true);
+  });
+
   it("fetches file content, skills, and project PRs", async () => {
     const fetch = mockFetch(200, { path: "a.md", content: "x", skills: [], prs: [] });
     const { getFileContent, getSkills, listPrs } = await import("./api");

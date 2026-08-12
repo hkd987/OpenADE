@@ -4,17 +4,21 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
 import { SessionMeta } from "./api";
 
-const { listSessions, getConfig, createSession } = vi.hoisted(() => ({
-  listSessions: vi.fn(),
-  getConfig: vi.fn(),
-  createSession: vi.fn(),
-}));
+const { listSessions, getConfig, createSession, listInbox } = vi.hoisted(
+  () => ({
+    listSessions: vi.fn(),
+    getConfig: vi.fn(),
+    createSession: vi.fn(),
+    listInbox: vi.fn(),
+  }),
+);
 
 vi.mock("./api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./api")>()),
   listSessions,
   getConfig,
   createSession,
+  listInbox,
 }));
 
 vi.mock("./components/Onboarding", () => ({
@@ -159,6 +163,34 @@ vi.mock("./components/TeamView", () => ({
   ),
 }));
 
+vi.mock("./components/InboxView", () => ({
+  InboxView: ({
+    repos,
+    onLaunched,
+  }: {
+    repos: string[];
+    onLaunched: (s: SessionMeta) => void;
+  }) => (
+    <div data-testid="inbox-stub">
+      repos:{repos.join(",")}
+      <button
+        data-testid="stub-triage"
+        onClick={() =>
+          onLaunched({
+            id: "triage-1",
+            title: "triage: NPE",
+            harness: "claude-code",
+            repo_root: "/repo",
+            state: "running",
+            created_at: "",
+            updated_at: "",
+          })
+        }
+      />
+    </div>
+  ),
+}));
+
 vi.mock("./components/SessionDetail", () => ({
   SessionDetail: ({
     session,
@@ -209,6 +241,7 @@ describe("App", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     getConfig.mockResolvedValue(onboardedConfig);
+    listInbox.mockResolvedValue({ items: [] });
   });
 
   it("shows first-run onboarding until it completes", async () => {
@@ -460,6 +493,37 @@ describe("App", () => {
     expect(screen.getByTestId("detail-stub")).toHaveTextContent("picked-1");
     // The workspace flag reaches the session detail (Share button).
     expect(screen.getByTestId("detail-stub")).toHaveTextContent("ws:true");
+  }, 10_000);
+
+  it("shows the Inbox view with a new-item badge and selects triage launches", async () => {
+    listSessions.mockResolvedValue({ sessions: [running] });
+    listInbox.mockResolvedValue({
+      items: [{ id: 1, status: "new", title: "NPE" }],
+    });
+    render(<App />);
+    await screen.findByText("task one");
+    // The badge rides the poll: one new item.
+    expect(await screen.findByTestId("inbox-count")).toHaveTextContent("1");
+
+    await userEvent.click(screen.getByTestId("view-inbox"));
+    expect(screen.getByTestId("inbox-stub")).toHaveTextContent("repos:/repo");
+    expect(screen.queryByTestId("session-grid")).toBeNull();
+
+    // A triage launch jumps back to Sessions with the session selected.
+    listSessions.mockResolvedValue({
+      sessions: [running, { ...running, id: "triage-1", title: "triage: NPE" }],
+    });
+    await userEvent.click(screen.getByTestId("stub-triage"));
+    expect(screen.getByTestId("session-grid")).toBeInTheDocument();
+    await act(async () => {});
+    expect(screen.getByTestId("detail-stub")).toHaveTextContent("triage-1");
+
+    // A broken inbox zeroes the badge instead of breaking the poll.
+    listInbox.mockRejectedValue(new Error("down"));
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 2100));
+    });
+    expect(screen.queryByTestId("inbox-count")).toBeNull();
   }, 10_000);
 
   it("toggles between card and compact grid layouts", async () => {
