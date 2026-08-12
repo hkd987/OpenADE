@@ -98,6 +98,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
+      # The build uses the repo's pinned toolchain (rust-toolchain.toml),
+      # not the action's stable — add the cross-target to it explicitly or
+      # cross builds fail with "can't find crate for `core`".
+      - name: Add target to the pinned toolchain
+        run: rustup target add ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.target }}
