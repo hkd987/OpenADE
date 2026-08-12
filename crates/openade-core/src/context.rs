@@ -17,6 +17,26 @@ pub const CONTEXT_BUNDLE_VERSION: u32 = 1;
 /// [`ContextBundle::estimated_tokens`] lets callers check before injecting.
 pub const CONTEXT_BUNDLE_TOKEN_BUDGET: usize = 4000;
 
+/// Prior attempts/sessions older than this are marked STALE in rendered
+/// context: they inform the decision but must not veto a retry — a lesson
+/// from a codebase that no longer exists shouldn't permanently foreclose
+/// anything. (Ported from Merge0's outcome-memory design.)
+pub const STALE_PRIOR_DAYS: i64 = 90;
+
+/// Cap on rendered prior sessions/attempts — newest first, rest dropped.
+pub const PRIOR_ATTEMPTS_CAP: usize = 5;
+
+/// Age annotation for a prior record: `"(41 days ago)"`, adding
+/// `" — STALE"` past [`STALE_PRIOR_DAYS`].
+pub fn age_annotation(then: DateTime<Utc>, now: DateTime<Utc>) -> String {
+    let days = (now - then).num_days().max(0);
+    if days > STALE_PRIOR_DAYS {
+        format!("({days} days ago — STALE)")
+    } else {
+        format!("({days} days ago)")
+    }
+}
+
 /// The compact context injected at session launch.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ContextBundle {
@@ -108,6 +128,10 @@ pub struct PriorSessionSummary {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub completed_at: Option<DateTime<Utc>>,
     pub summary: String,
+    /// What reality decided about this session's work, once known
+    /// (`merged` / `closed` / `reverted`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verdict: Option<String>,
 }
 
 impl ContextBundle {
@@ -209,8 +233,16 @@ impl ContextBundle {
 
         if !self.prior_sessions.is_empty() {
             out.push_str("\n## Prior sessions on this entity\n\n");
-            for s in &self.prior_sessions {
-                out.push_str(&format!("- ({}) {}\n", s.session_id, s.summary));
+            let now = Utc::now();
+            for s in self.prior_sessions.iter().take(PRIOR_ATTEMPTS_CAP) {
+                out.push_str(&format!("- ({}) {}", s.session_id, s.summary));
+                if let Some(v) = &s.verdict {
+                    out.push_str(&format!(" [verdict: {v}]"));
+                }
+                if let Some(t) = s.completed_at {
+                    out.push_str(&format!(" {}", age_annotation(t, now)));
+                }
+                out.push('\n');
             }
         }
 
@@ -218,6 +250,42 @@ impl ContextBundle {
             "\n> Deeper context (full entity data, TechDocs pages, catalog search) is \
              available on demand through the `catalog` MCP tools.\n",
         );
+        out
+    }
+
+    /// Render within the token budget, dropping WHOLE sections (in a
+    /// documented order: dependencies, then APIs, then docs, then prior
+    /// sessions) until it fits — and NAMING what was dropped instead of
+    /// silently truncating, so the agent knows what it doesn't know and
+    /// can fetch it through the `catalog` MCP tools.
+    pub fn to_markdown_budgeted(&self) -> String {
+        if self.within_budget() {
+            return self.to_markdown();
+        }
+        type Trim = fn(&mut ContextBundle);
+        let mut trimmed = self.clone();
+        let mut dropped: Vec<&str> = Vec::new();
+        let order: [(&str, Trim); 4] = [
+            ("Dependencies", |b| b.dependencies.clear()),
+            ("APIs", |b| b.apis.clear()),
+            ("Documentation", |b| b.docs.clear()),
+            ("Prior sessions", |b| b.prior_sessions.clear()),
+        ];
+        for (name, clear) in order {
+            if trimmed.within_budget() {
+                break;
+            }
+            clear(&mut trimmed);
+            dropped.push(name);
+        }
+        let mut out = trimmed.to_markdown();
+        out.push_str(&format!(
+            "\n> [NOTE: {} section(s) did not fit the context budget and are NOT \
+             shown: {}. Fetch them through the `catalog` MCP tools before \
+             deciding anything they might govern.]\n",
+            dropped.len(),
+            dropped.join(", "),
+        ));
         out
     }
 }

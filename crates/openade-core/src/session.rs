@@ -58,6 +58,10 @@ pub struct SessionMeta {
     /// (e.g. `component:default/payments-api`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub entity_ref: Option<String>,
+    /// The inbox item this session was started from, if any (triage
+    /// sessions record their outcome back to it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inbox_item_id: Option<i64>,
     /// Current lifecycle state.
     pub state: SessionState,
     pub created_at: DateTime<Utc>,
@@ -77,6 +81,7 @@ impl SessionMeta {
             branch: None,
             base_commit: None,
             entity_ref: None,
+            inbox_item_id: None,
             state: SessionState::Idle,
             created_at: now,
             updated_at: now,

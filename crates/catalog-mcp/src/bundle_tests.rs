@@ -8,6 +8,7 @@ async fn builds_a_complete_bundle() {
         &provider,
         &"component:default/payments-api".parse().unwrap(),
         vec![PriorSessionSummary {
+            verdict: None,
             session_id: "s-1".into(),
             harness: Some("claude-code".into()),
             completed_at: None,

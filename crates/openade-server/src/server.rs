@@ -119,7 +119,7 @@ pub fn router(state: Arc<AppState>) -> Router {
 #[derive(Deserialize)]
 #[serde(untagged)]
 enum OneOrMany {
-    One(SignalIn),
+    One(Box<SignalIn>),
     Many(Vec<SignalIn>),
 }
 
@@ -133,7 +133,7 @@ async fn ingest_signals(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let (org, _) = member(&state, &headers)?;
     let signals = match body {
-        OneOrMany::One(s) => vec![s],
+        OneOrMany::One(s) => vec![*s],
         OneOrMany::Many(v) => v,
     };
     let (mut inserted, mut updated, mut escalated) = (0, 0, 0);

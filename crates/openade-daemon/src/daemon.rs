@@ -87,6 +87,22 @@ pub struct PickupRequest {
     pub command_override: Option<CommandSpec>,
 }
 
+/// Request to start a session from an inbox item (triage session).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct FromInboxRequest {
+    pub item_id: i64,
+    pub harness: Harness,
+    pub repo_root: PathBuf,
+    #[serde(default)]
+    pub checkout: CheckoutMode,
+    /// Look without deciding: the item stays in the queue for the team.
+    #[serde(default)]
+    pub investigate: bool,
+    /// Testing/backdoor, as in [`LaunchSessionRequest`].
+    #[serde(default)]
+    pub command_override: Option<CommandSpec>,
+}
+
 /// Errors from the daemon's session lifecycle.
 #[derive(Debug, thiserror::Error)]
 pub enum DaemonError {
@@ -126,6 +142,12 @@ pub struct Daemon {
     sessions: Mutex<HashMap<Uuid, SessionMeta>>,
     memory: std::sync::RwLock<MemoryState>,
     settings: std::sync::RwLock<crate::config::Settings>,
+    /// Embedded inbox store (the local fallback when no workspace server
+    /// is configured; same schema as the server by construction).
+    inbox_store: Arc<openade_server::store::Store>,
+    /// Local session id → shared workspace session id, so outcome
+    /// verdicts reach the team copy of a shared session.
+    shared_ids: Mutex<HashMap<Uuid, i64>>,
 }
 
 impl Daemon {
@@ -134,6 +156,8 @@ impl Daemon {
         let data_dir = data_dir.into();
         fs::create_dir_all(&data_dir)?;
         let store = TranscriptStore::open(&data_dir)?;
+        let inbox_store = openade_server::store::Store::open(&data_dir)
+            .map_err(|e| DaemonError::Workspace(format!("local inbox store: {e}")))?;
         Ok(Daemon {
             data_dir,
             pty: PtyHost::new(),
@@ -141,7 +165,18 @@ impl Daemon {
             sessions: Mutex::new(HashMap::new()),
             memory: std::sync::RwLock::new(MemoryState::default()),
             settings: std::sync::RwLock::new(crate::config::Settings::default()),
+            inbox_store: Arc::new(inbox_store),
+            shared_ids: Mutex::new(HashMap::new()),
         })
+    }
+
+    /// The inbox for this request: the team's (workspace server) when
+    /// multiplayer is configured, the embedded local one otherwise.
+    pub fn inbox_backend(&self) -> crate::inbox::InboxBackend {
+        match self.workspace_client() {
+            Some(client) => crate::inbox::InboxBackend::Remote(client),
+            None => crate::inbox::InboxBackend::Embedded(self.inbox_store.clone()),
+        }
     }
 
     fn memory_read(&self) -> std::sync::RwLockReadGuard<'_, MemoryState> {
@@ -383,6 +418,7 @@ impl Daemon {
                 harness: None,
                 completed_at: None,
                 summary: line.trim_start_matches("- ").to_string(),
+                verdict: None,
             });
         }
     }
@@ -403,11 +439,17 @@ impl Daemon {
         match client.sessions(Some(entity_ref)).await {
             Ok(sessions) => {
                 for s in sessions.into_iter().take(MAX_SHARED) {
+                    // The upload time gives the age/STALE annotation; the
+                    // verdict says whether the shared work actually shipped.
+                    let uploaded = chrono::DateTime::parse_from_rfc3339(&s.uploaded_at)
+                        .ok()
+                        .map(|t| t.with_timezone(&chrono::Utc));
                     bundle.prior_sessions.push(PriorSessionSummary {
                         session_id: format!("workspace-{}", s.id),
                         harness: Some(s.harness),
-                        completed_at: None,
+                        completed_at: uploaded,
                         summary: format!("{} — {} (shared by {})", s.title, s.summary, s.shared_by),
+                        verdict: s.verdict.clone(),
                     });
                 }
             }
@@ -446,7 +488,231 @@ impl Daemon {
             "markdown": summarizer.summarize(&meta, &events, &diff),
             "events": events,
         });
-        client.upload(&record).await.map_err(DaemonError::Workspace)
+        let shared = client
+            .upload(&record)
+            .await
+            .map_err(DaemonError::Workspace)?;
+        // Remember the team copy so an outcome verdict can reach it later.
+        self.shared_ids
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(id, shared.id);
+        Ok(shared)
+    }
+
+    /// Start a session from an inbox item (triage session): the item's
+    /// evidence and the outcome history of prior attempts land in
+    /// `.openade/inbox-item.md`, and the agent is prompted to investigate
+    /// and fix. Accepts the item — teammates see who took it — unless
+    /// `investigate` (a look without a decision).
+    pub async fn start_from_inbox(
+        &self,
+        req: FromInboxRequest,
+    ) -> Result<SessionMeta, DaemonError> {
+        let backend = self.inbox_backend();
+        let detail = backend
+            .inbox_item(req.item_id)
+            .await
+            .map_err(DaemonError::Workspace)?;
+        let item = &detail["item"];
+        let title = item["title"].as_str().unwrap_or("inbox item").to_string();
+        let severity = item["severity"].as_str().unwrap_or("unknown");
+
+        let mut doc = format!(
+            "# Triaging: {title}\n\nSeverity **{severity}**, affected {}, first seen {}, last seen {}.\n",
+            item["affected_count"]
+                .as_i64()
+                .map(|n| n.to_string())
+                .unwrap_or_else(|| "unknown".into()),
+            detail["signals"][0]["first_seen"].as_str().unwrap_or("?"),
+            item["last_seen"].as_str().unwrap_or("?"),
+        );
+        if let Some(signals) = detail["signals"].as_array() {
+            for sig in signals {
+                doc.push_str(&format!(
+                    "\n## Signal from {} ({})\n\n{}\n",
+                    sig["source"].as_str().unwrap_or("?"),
+                    sig["kind"].as_str().unwrap_or("?"),
+                    sig["body"].as_str().unwrap_or(""),
+                ));
+                if let Some(evidence) = sig["evidence"].as_array() {
+                    if !evidence.is_empty() {
+                        doc.push_str("\nEvidence:\n");
+                        for e in evidence {
+                            doc.push_str(&format!(
+                                "- [{}]({})\n",
+                                e["label"].as_str().unwrap_or("link"),
+                                e["url"].as_str().unwrap_or(""),
+                            ));
+                        }
+                    }
+                }
+                let keys = &sig["join_keys"];
+                if keys.as_object().is_some_and(|o| !o.is_empty()) {
+                    doc.push_str(&format!("\nJoin keys: `{keys}`\n"));
+                }
+            }
+        }
+        let outcomes = detail["outcomes"].as_array().cloned().unwrap_or_default();
+        if !outcomes.is_empty() {
+            doc.push_str("\n## Prior outcomes on this fingerprint\n\n");
+            let now = chrono::Utc::now();
+            for o in outcomes
+                .iter()
+                .take(openade_core::context::PRIOR_ATTEMPTS_CAP)
+            {
+                let age = o["occurred_at"]
+                    .as_str()
+                    .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
+                    .map(|t| {
+                        openade_core::context::age_annotation(t.with_timezone(&chrono::Utc), now)
+                    })
+                    .unwrap_or_default();
+                let pr = o["pr_url"]
+                    .as_str()
+                    .map(|u| format!(" [attempt PR: {u}]"))
+                    .unwrap_or_default();
+                let note = o["note"]
+                    .as_str()
+                    .map(|n| format!(" ({n})"))
+                    .unwrap_or_default();
+                doc.push_str(&format!(
+                    "- \"{}\" on {} {age}{note}{pr}\n",
+                    o["kind"].as_str().unwrap_or("?"),
+                    o["occurred_at"]
+                        .as_str()
+                        .map(|t| t.split('T').next().unwrap_or(t))
+                        .unwrap_or("?"),
+                ));
+            }
+            doc.push_str(
+                "\nSTALE entries are old context — they inform, they do not veto a retry.\n",
+            );
+        }
+
+        let prompt = format!(
+            "You are triaging the signal {title:?} (severity {severity}). Read \
+             .openade/inbox-item.md for the evidence and the outcome history of \
+             prior attempts, investigate the root cause, and fix it with tests."
+        );
+        let launch = LaunchSessionRequest {
+            title: format!("triage: {title}"),
+            harness: req.harness,
+            repo_root: req.repo_root,
+            checkout: req.checkout,
+            entity_ref: None,
+            prompt: Some(prompt),
+            mcp_servers: Vec::new(),
+            command_override: req.command_override,
+        };
+        let mut meta = self.launch(launch, None)?;
+        let wt = meta
+            .worktree_path
+            .clone()
+            .expect("launched session has a workdir");
+        let dot = wt.join(".openade");
+        fs::create_dir_all(&dot)?;
+        fs::write(dot.join("inbox-item.md"), &doc)?;
+
+        if !req.investigate {
+            backend
+                .accept(req.item_id)
+                .await
+                .map_err(DaemonError::Workspace)?;
+        }
+        meta.inbox_item_id = Some(req.item_id);
+        self.sessions
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(meta.id, meta.clone());
+        Ok(meta)
+    }
+
+    /// Record what reality decided about an inbox-launched session: the
+    /// task branch's PR fate via the user's own gh CLI. Idempotent — safe
+    /// to call on every terminal-state edge. Also stamps the verdict on
+    /// the shared team copy when the session was shared.
+    pub async fn record_inbox_outcome(&self, id: Uuid) -> Result<serde_json::Value, DaemonError> {
+        let meta = self.get(id)?;
+        let Some(item_id) = meta.inbox_item_id else {
+            return Err(DaemonError::Workspace(
+                "session was not started from an inbox item".into(),
+            ));
+        };
+        let Some(branch) = meta.branch.clone() else {
+            return Ok(serde_json::json!({ "recorded": false, "note": "session has no branch" }));
+        };
+        let repo_root = meta.repo_root.clone();
+        let fate = tokio::task::spawn_blocking(move || Self::branch_pr_fate(&repo_root, &branch))
+            .await
+            .expect("pr fate task panicked");
+        let (kind, pr_url) = match fate {
+            Ok(Some(pair)) => pair,
+            Ok(None) => {
+                return Ok(serde_json::json!({
+                    "recorded": false,
+                    "note": "no decided PR for the session branch yet",
+                }));
+            }
+            Err(note) => return Ok(serde_json::json!({ "recorded": false, "note": note })),
+        };
+        let result = self
+            .inbox_backend()
+            .record_outcome(item_id, kind.clone(), Some(pr_url.clone()), None)
+            .await
+            .map_err(DaemonError::Workspace)?;
+        self.store.record(
+            id,
+            EventKind::Outcome,
+            serde_json::json!({ "kind": kind, "pr_url": pr_url, "inbox_item_id": item_id }),
+        )?;
+        // Verdicts travel to the shared team copy too.
+        let shared_id = self
+            .shared_ids
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&id)
+            .copied();
+        if let Some(sid) = shared_id {
+            if let Some(client) = self.workspace_client() {
+                if let Err(e) = client.set_verdict(sid, &kind).await {
+                    tracing::warn!("verdict did not reach the shared session: {e}");
+                }
+            }
+        }
+        Ok(serde_json::json!({
+            "recorded": result["recorded"],
+            "kind": kind,
+            "pr_url": pr_url,
+        }))
+    }
+
+    /// The fate of the branch's PR via the user's gh CLI:
+    /// `Ok(Some((kind, url)))` when decided, `Ok(None)` when still open or
+    /// absent, `Err(note)` when gh is unavailable/unusable.
+    fn branch_pr_fate(
+        repo_root: &std::path::Path,
+        branch: &str,
+    ) -> Result<Option<(String, String)>, String> {
+        let Some(gh) = catalog_mcp::github::resolve_gh_bin() else {
+            return Err("gh CLI not available".to_string());
+        };
+        let output = std::process::Command::new(gh)
+            .current_dir(repo_root)
+            .args(["pr", "view", branch, "--json", "state,url"])
+            .output()
+            .map_err(|e| e.to_string())?;
+        if !output.status.success() {
+            return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+        }
+        let parsed: serde_json::Value =
+            serde_json::from_slice(&output.stdout).map_err(|e| format!("bad gh output: {e}"))?;
+        let url = parsed["url"].as_str().unwrap_or("").to_string();
+        match parsed["state"].as_str() {
+            Some("MERGED") => Ok(Some(("merged".to_string(), url))),
+            Some("CLOSED") => Ok(Some(("closed".to_string(), url))),
+            _ => Ok(None),
+        }
     }
 
     /// Pick up a shared workspace session as a new local session — in any
@@ -563,6 +829,7 @@ Shared by **{}** (originally run on {}), uploaded {}.
                     harness: Some(rec.harness),
                     completed_at: rec.ended_at,
                     summary,
+                    verdict: None,
                 }
             })
             .collect()
@@ -617,7 +884,7 @@ Shared by **{}** (originally run on {}), uploaded {}.
                 dot_openade.join("context.json"),
                 serde_json::to_string_pretty(bundle).unwrap_or_default(),
             )?;
-            let markdown = bundle.to_markdown();
+            let markdown = bundle.to_markdown_budgeted();
             fs::write(dot_openade.join("context.md"), &markdown)?;
 
             let rules_file = wt_path.join(req.harness.rules_filename());
