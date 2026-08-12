@@ -57,7 +57,7 @@ esac
 /// chmod +x, then probe until the script actually execs: a child forked by
 /// a parallel test during the write can briefly hold the shim's write fd,
 /// failing the first exec with ETXTBSY ("Text file busy").
-fn make_executable(shim: &Path) {
+pub(crate) fn make_executable(shim: &Path) {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
