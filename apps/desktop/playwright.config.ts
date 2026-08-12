@@ -19,6 +19,8 @@ const uiPort = 5199;
 // Second, unconfigured daemon + UI pair: exercises first-run onboarding.
 const onboardingDaemonPort = 7456;
 const onboardingUiPort = 5198;
+// Self-hosted multiplayer workspace server (team.spec.ts).
+const serverPort = 7501;
 
 // Build the fixture world NOW — the daemon webServer boots against these
 // paths before any globalSetup hook would run. Guarded: this config is
@@ -95,6 +97,22 @@ export default defineConfig({
         OPENADE_DAEMON_PORT: String(onboardingDaemonPort),
         OPENADE_DATA_DIR: path.join(tmpDir, "data-onboarding"),
         PATH: `${path.join(tmpDir, "bin")}:${process.env.PATH ?? ""}`,
+      },
+    },
+    {
+      // Multiplayer workspace hub: a real openade-server with a fresh data
+      // dir. team.spec.ts mints a member token over HTTP with the admin
+      // token and configures the main daemon through the Settings UI.
+      command: "cargo run --quiet -p openade-server",
+      cwd: path.resolve(__dirname, "../.."),
+      url: `http://127.0.0.1:${serverPort}/health`,
+      timeout: 600_000,
+      reuseExistingServer: false,
+      env: {
+        OPENADE_SERVER_PORT: String(serverPort),
+        OPENADE_SERVER_BIND: "127.0.0.1",
+        OPENADE_SERVER_DATA_DIR: path.join(tmpDir, "server-data"),
+        OPENADE_SERVER_ADMIN_TOKEN: "e2e-admin",
       },
     },
     {
