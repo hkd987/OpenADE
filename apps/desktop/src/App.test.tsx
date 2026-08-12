@@ -129,16 +129,48 @@ vi.mock("./components/NewSessionForm", () => ({
   ),
 }));
 
+vi.mock("./components/TeamView", () => ({
+  TeamView: ({
+    configured,
+    repos,
+    onPickedUp,
+  }: {
+    configured: boolean;
+    repos: string[];
+    onPickedUp: (s: SessionMeta) => void;
+  }) => (
+    <div data-testid="team-stub">
+      configured:{String(configured)} repos:{repos.join(",")}
+      <button
+        data-testid="stub-pickup"
+        onClick={() =>
+          onPickedUp({
+            id: "picked-1",
+            title: "picked up",
+            harness: "gemini-cli",
+            repo_root: "/repo",
+            state: "running",
+            created_at: "",
+            updated_at: "",
+          })
+        }
+      />
+    </div>
+  ),
+}));
+
 vi.mock("./components/SessionDetail", () => ({
   SessionDetail: ({
     session,
     onChanged,
+    workspaceConfigured,
   }: {
     session: SessionMeta;
     onChanged: (selectId?: string) => void;
+    workspaceConfigured?: boolean;
   }) => (
     <div data-testid="detail-stub">
-      {session.id}
+      {session.id} ws:{String(workspaceConfigured)}
       <button data-testid="stub-select-other" onClick={() => onChanged("s-2")}>
         select other
       </button>
@@ -167,6 +199,10 @@ const onboardedConfig = {
   memory_sources: ["github"],
   gh_found: true,
   gh_authenticated: true,
+  server_url: null,
+  server_token_set: false,
+  server_workspace: null,
+  workspace_configured: false,
 };
 
 describe("App", () => {
@@ -395,6 +431,36 @@ describe("App", () => {
       "launch failed",
     );
   });
+
+  it("shows the Team view and selects a picked-up session", async () => {
+    getConfig.mockResolvedValue({
+      ...onboardedConfig,
+      workspace_configured: true,
+    });
+    listSessions.mockResolvedValue({ sessions: [running] });
+    render(<App />);
+    await screen.findByText("task one");
+    await userEvent.click(screen.getByTestId("view-team"));
+    // Configuration and the known repos flow into the view.
+    expect(screen.getByTestId("team-stub")).toHaveTextContent(
+      "configured:true repos:/repo",
+    );
+    expect(screen.queryByTestId("session-grid")).toBeNull();
+
+    // Picking a shared session up jumps back to Sessions with it selected.
+    await userEvent.click(screen.getByTestId("stub-pickup"));
+    expect(screen.getByTestId("session-grid")).toBeInTheDocument();
+    // The picked session renders once the poll returns it.
+    listSessions.mockResolvedValue({
+      sessions: [running, { ...running, id: "picked-1", title: "picked up" }],
+    });
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 2100));
+    });
+    expect(screen.getByTestId("detail-stub")).toHaveTextContent("picked-1");
+    // The workspace flag reaches the session detail (Share button).
+    expect(screen.getByTestId("detail-stub")).toHaveTextContent("ws:true");
+  }, 10_000);
 
   it("toggles between card and compact grid layouts", async () => {
     listSessions.mockResolvedValue({ sessions: [running] });

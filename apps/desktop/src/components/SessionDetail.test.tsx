@@ -6,7 +6,7 @@ import { SessionDetail } from "./SessionDetail";
 
 const { getDiff, getFiles,
   getFileContent,
-  getSkills, handoffSession, killSession, publishArtifact } =
+  getSkills, handoffSession, killSession, publishArtifact, shareSession } =
   vi.hoisted(() => ({
     getDiff: vi.fn(),
     getFiles: vi.fn(),
@@ -15,6 +15,7 @@ const { getDiff, getFiles,
     handoffSession: vi.fn(),
     killSession: vi.fn(),
     publishArtifact: vi.fn(),
+    shareSession: vi.fn(),
   }));
 
 vi.mock("../api", async (importOriginal) => ({
@@ -26,6 +27,7 @@ vi.mock("../api", async (importOriginal) => ({
   handoffSession,
   killSession,
   publishArtifact,
+  shareSession,
 }));
 
 vi.mock("./TerminalView", () => ({
@@ -121,6 +123,43 @@ describe("SessionDetail", () => {
     await userEvent.click(screen.getByTestId("handoff-button"));
     await waitFor(() => expect(onChanged).toHaveBeenCalledWith("s-2"));
     expect(handoffSession).toHaveBeenCalledWith("s-1", "gemini-cli");
+  });
+
+  it("hides Share until a workspace is configured, then shares with a banner", async () => {
+    shareSession.mockResolvedValue({
+      id: 7,
+      title: "add retries",
+      harness: "claude-code",
+      summary: "s",
+      shared_by: "casey",
+      uploaded_at: "2026-08-11T10:00:00Z",
+    });
+    const { rerender } = render(
+      <SessionDetail session={session} onChanged={vi.fn()} />,
+    );
+    expect(screen.queryByTestId("share-button")).toBeNull();
+
+    rerender(
+      <SessionDetail
+        session={session}
+        onChanged={vi.fn()}
+        workspaceConfigured
+      />,
+    );
+    await userEvent.click(screen.getByTestId("share-button"));
+    const banner = await screen.findByTestId("share-banner");
+    expect(banner).toHaveTextContent("#7");
+    expect(banner).toHaveTextContent("Team view");
+    expect(shareSession).toHaveBeenCalledWith("s-1");
+
+    // Share failures (server down, bad token) surface as the alert.
+    shareSession.mockRejectedValue(
+      new Error("workspace server rejected the token"),
+    );
+    await userEvent.click(screen.getByTestId("share-button"));
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "rejected the token",
+    );
   });
 
   it("kills the session and surfaces action errors", async () => {

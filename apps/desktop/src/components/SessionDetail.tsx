@@ -11,8 +11,10 @@ import {
   getFileContent,
   getSkills,
   SessionMeta,
+  shareSession,
   SkillInfo,
   timeAgo,
+  WorkspaceSession,
 } from "../api";
 import { TerminalView } from "./TerminalView";
 
@@ -23,9 +25,12 @@ const RULES_FILES = ["CLAUDE.md", "AGENTS.md", "GEMINI.md", ".openade/rules.md"]
 export function SessionDetail({
   session,
   onChanged,
+  workspaceConfigured = false,
 }: {
   session: SessionMeta;
   onChanged: (selectId?: string) => void;
+  /** Whether a multiplayer workspace server is configured (Share button). */
+  workspaceConfigured?: boolean;
 }) {
   const [tab, setTab] = useState<Tab>("terminal");
   const [diff, setDiff] = useState("");
@@ -33,12 +38,14 @@ export function SessionDetail({
   const [skills, setSkills] = useState<SkillInfo[]>([]);
   const [viewing, setViewing] = useState<{ path: string; content: string } | null>(null);
   const [artifact, setArtifact] = useState<ArtifactInfo | null>(null);
+  const [shared, setShared] = useState<WorkspaceSession | null>(null);
   const [handoffTo, setHandoffTo] = useState<Harness>("gemini-cli");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     setArtifact(null);
+    setShared(null);
     setError(null);
     setViewing(null);
     setTab("terminal");
@@ -130,6 +137,19 @@ export function SessionDetail({
           >
             Artifact
           </button>
+          {workspaceConfigured && (
+            <button
+              disabled={busy}
+              onClick={() =>
+                act(async () => {
+                  setShared(await shareSession(session.id));
+                })
+              }
+              data-testid="share-button"
+            >
+              Share
+            </button>
+          )}
           <button
             disabled={busy}
             className="danger"
@@ -170,6 +190,14 @@ export function SessionDetail({
               .
             </>
           )}
+        </div>
+      )}
+
+      {shared !== null && (
+        <div className="artifact-banner" data-testid="share-banner">
+          Shared to the team workspace as session <code>#{shared.id}</code> —
+          teammates can browse it in the Team view and pick it up in any
+          harness.
         </div>
       )}
 

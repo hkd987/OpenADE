@@ -190,6 +190,45 @@ describe("api client", () => {
     });
   });
 
+  it("shares, lists, reads, and picks up workspace sessions", async () => {
+    const fetch = mockFetch(200, {
+      id: 7,
+      sessions: [],
+      session: { id: 7 },
+      markdown: "",
+      events: [],
+    });
+    const {
+      shareSession,
+      pickupSession,
+      listWorkspaceSessions,
+      getWorkspaceSession,
+    } = await import("./api");
+    await shareSession("abc");
+    await listWorkspaceSessions();
+    await listWorkspaceSessions("repo:acme/payments");
+    await getWorkspaceSession(7);
+    await pickupSession({
+      workspace_session_id: 7,
+      harness: "gemini-cli",
+      repo_root: "/repo",
+    });
+    const urls = fetch.mock.calls.map((c) => c[0] as string);
+    expect(urls[0]).toContain("/sessions/abc/share");
+    expect(urls[1]).toMatch(/\/workspace\/sessions$/);
+    expect(urls[2]).toContain(
+      "/workspace/sessions?entity=repo%3Aacme%2Fpayments",
+    );
+    expect(urls[3]).toContain("/workspace/sessions/7");
+    const pickupInit = fetch.mock.calls[4][1] as RequestInit;
+    expect(pickupInit.method).toBe("POST");
+    expect(JSON.parse(pickupInit.body as string)).toEqual({
+      workspace_session_id: 7,
+      harness: "gemini-cli",
+      repo_root: "/repo",
+    });
+  });
+
   it("fetches file content, skills, and project PRs", async () => {
     const fetch = mockFetch(200, { path: "a.md", content: "x", skills: [], prs: [] });
     const { getFileContent, getSkills, listPrs } = await import("./api");

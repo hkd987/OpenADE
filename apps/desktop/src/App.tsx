@@ -13,6 +13,7 @@ import { Onboarding } from "./components/Onboarding";
 import { ProjectsView } from "./components/ProjectsView";
 import { SessionCard } from "./components/SessionCard";
 import { SessionDetail } from "./components/SessionDetail";
+import { TeamView } from "./components/TeamView";
 
 const POLL_MS = 2000;
 
@@ -24,7 +25,9 @@ export default function App() {
   const [formRepo, setFormRepo] = useState<string | undefined>(undefined);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [config, setConfig] = useState<DaemonConfig | null>(null);
-  const [view, setView] = useState<"sessions" | "projects">("sessions");
+  const [view, setView] = useState<"sessions" | "projects" | "team">(
+    "sessions",
+  );
   const [layout, setLayout] = useState<"cards" | "compact">("cards");
   const [showPalette, setShowPalette] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
@@ -156,6 +159,13 @@ export default function App() {
           >
             Projects
           </button>
+          <button
+            className={`view-pill ${view === "team" ? "active" : ""}`}
+            onClick={() => setView("team")}
+            data-testid="view-team"
+          >
+            Team
+          </button>
         </nav>
         <span className="header-spacer" />
         <button
@@ -205,7 +215,17 @@ export default function App() {
         />
       )}
 
-      {view === "projects" ? (
+      {view === "team" ? (
+        <TeamView
+          configured={config?.workspace_configured === true}
+          repos={projects.map((p) => p.repoRoot)}
+          onPickedUp={(session) => {
+            setSelected(session.id);
+            setView("sessions");
+            void refresh();
+          }}
+        />
+      ) : view === "projects" ? (
         <ProjectsView
           projects={projects}
           onNewSession={(repo) => openForm(repo)}
@@ -293,6 +313,7 @@ export default function App() {
             {selectedSession ? (
               <SessionDetail
                 session={selectedSession}
+                workspaceConfigured={config?.workspace_configured === true}
                 onChanged={(selectId) => {
                   if (selectId !== undefined) {
                     setSelected(selectId);
