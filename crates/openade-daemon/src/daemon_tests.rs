@@ -218,11 +218,7 @@ fn pull_requests_report_via_gh_and_degrade_without_it() {
         "#!/bin/sh\ncase \"$*\" in\n  \"pr list\"*) printf '[{\"number\":7,\"title\":\"Add retries\",\"url\":\"https://github.com/acme/x/pull/7\",\"headRefName\":\"retries\",\"isDraft\":false}]' ;;\n  *) echo 'gh: Not Found (HTTP 404)' >&2; exit 1 ;;\nesac\n",
     )
     .unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755)).unwrap();
-    }
+    crate::memory_repo::tests::make_executable(&shim);
     std::env::set_var("OPENADE_GH_BIN", &shim);
     std::env::remove_var("OPENADE_GITHUB_MEMORY");
     let result = Daemon::pull_requests(tmp.path());
@@ -232,11 +228,7 @@ fn pull_requests_report_via_gh_and_degrade_without_it() {
     // gh failure → empty list with the reason.
     let failing = tmp.path().join("gh-fail");
     std::fs::write(&failing, "#!/bin/sh\necho 'no remote' >&2\nexit 1\n").unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&failing, std::fs::Permissions::from_mode(0o755)).unwrap();
-    }
+    crate::memory_repo::tests::make_executable(&failing);
     std::env::set_var("OPENADE_GH_BIN", &failing);
     let result = Daemon::pull_requests(tmp.path());
     assert_eq!(result["prs"].as_array().unwrap().len(), 0);
