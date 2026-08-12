@@ -927,6 +927,8 @@ button.project-group-header:hover {
   flex-direction: column;
   gap: 8px;
   max-width: 720px;
+  width: 100%;
+  margin: 0 auto;
 }
 
 .team-row {
@@ -975,6 +977,8 @@ button.project-group-header:hover {
   display: flex;
   flex-direction: column;
   gap: 10px;
+  width: 100%;
+  margin: 0 auto;
 }
 
 .team-pickup {
@@ -1042,6 +1046,8 @@ button.project-group-header:hover {
   flex-direction: column;
   gap: 8px;
   max-width: 720px;
+  width: 100%;
+  margin: 0 auto;
 }
 
 .inbox-group {
@@ -1117,6 +1123,8 @@ button.project-group-header:hover {
   display: flex;
   flex-direction: column;
   gap: 10px;
+  width: 100%;
+  margin: 0 auto;
 }
 
 .inbox-actions {
