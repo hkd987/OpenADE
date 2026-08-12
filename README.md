@@ -54,6 +54,16 @@ telemetry, local-first.
   knows. GitHub memory needs the [GitHub CLI](https://cli.github.com)
   installed and authenticated (`gh auth login`); the daemon tells you at
   startup — with the fix — if `gh` is missing or logged out.
+- **Multiplayer workspaces (self-hosted)** — run the included
+  `openade-server` binary and your team gets a shared workspace: press
+  **Share** on any session and its harness-neutral record (summary,
+  artifact, transcript) is uploaded for teammates to browse in the
+  **Team** view — and to **pick up**: anyone can resume any shared
+  session, anytime, in *any* harness (a Claude Code session picks up in
+  Copilot CLI), in their own clone under their own credentials. Sharing is
+  manual and per-session; access is by revocable member tokens; shared
+  history on an entity flows into the next session's context bundle
+  automatically. Full guide: [docs/multiplayer.md](docs/multiplayer.md).
 - **Cross-harness handoff** — move a task Claude → Gemini (any direction) in
   place: same worktree and branch, rules re-materialized, a written handoff
   summary, and the new harness prompted to pick up where the old one left
@@ -82,12 +92,15 @@ memory repo immediately:
 **From a release** (Linux x86_64/aarch64, macOS Intel/Apple Silicon):
 download the tarball for your platform from
 [GitHub Releases](https://github.com/hkd987/OpenADE/releases), verify the
-checksum, and put `openade-daemon` and `catalog-mcp` on your PATH.
+checksum, and put `openade-daemon` and `catalog-mcp` on your PATH
+(`openade-server` is in the same tarball — only the machine hosting your
+team's [multiplayer workspace](docs/multiplayer.md) needs it).
 
 **From source** (Rust 1.80+):
 
 ```sh
 cargo install --path crates/openade-daemon --path crates/catalog-mcp
+cargo install --path crates/openade-server   # team workspace host only
 ```
 
 The harness CLIs themselves are bring-your-own: install and authenticate
@@ -147,7 +160,10 @@ Everything is skippable because GitHub memory is zero-config.
 Useful daemon endpoints: `GET /sessions`, `GET /sessions/{id}/scrollback`,
 `POST /sessions/{id}/input`, `GET /sessions/{id}/diff`, `.../files`,
 `POST /sessions/{id}/artifact`, `POST /sessions/{id}/handoff`,
-`DELETE /sessions/{id}`, `DELETE /sessions/{id}/worktree`, `GET /projects`,
+`POST /sessions/{id}/share`, `POST /sessions/pickup`,
+`GET /workspace/sessions` (team history, proxied so the member token stays
+in the daemon), `DELETE /sessions/{id}`, `DELETE /sessions/{id}/worktree`,
+`GET /projects`,
 `GET`/`PUT /config` (settings + memory/gh status, used by onboarding).
 
 Environment knobs: `OPENADE_DAEMON_PORT` (default 7433), `OPENADE_DATA_DIR`
@@ -161,6 +177,10 @@ memory source, the shared memory repo, and status probes),
 shared team memory repo; a repository's committed `.openade/memory-repo`
 file takes precedence — artifacts are pushed directly to its default
 branch, so everyone on it needs write access),
+`OPENADE_SERVER_URL` / `OPENADE_SERVER_TOKEN` / `OPENADE_SERVER_WORKSPACE`
+(multiplayer workspace connection — usually set in the Settings dialog
+instead; [docs/multiplayer.md](docs/multiplayer.md) covers the
+`openade-server`-side knobs),
 `VITE_OPENADE_DAEMON_URL` (UI → daemon).
 
 ## Architecture
@@ -194,6 +214,10 @@ branch, so everyone on it needs write access),
 Shared domain types live in `crates/openade-core`. Memory sources implement
 the `CatalogProvider` trait and are composed by kind (`repo:` → GitHub,
 everything else → Backstage) — neither backend is a hard dependency.
+`crates/openade-server` is the optional, self-hostable multiplayer
+workspace hub (own binary; the daemon talks to it over HTTP with a member
+token and proxies the UI's Team view so the token never reaches the
+browser).
 
 ## Documentation
 
@@ -203,6 +227,7 @@ everything else → Backstage) — neither backend is a hard dependency.
 | [ADR-001](docs/adr/ADR-001-desktop-shell.md) | Desktop shell decision (Tauri vs Electron vs TUI) |
 | [catalog-mcp tools](docs/catalog-mcp-tools.md) | MCP tool schemas, auth, design rules |
 | [Phase 0 spike](docs/phase-0-spike.md) | Real-CLI verification plan (the gate to beta) |
+| [Multiplayer](docs/multiplayer.md) | Self-hosted team workspaces: share, browse, pick up in any harness |
 | [Testing & coverage](docs/testing.md) | Test strategy, 100% line coverage methodology |
 | [Manual e2e record](docs/manual-e2e.md) | By-hand verification of the assembled system |
 | [Desktop app](apps/desktop/README.md) | UI development and the Tauri shell |
@@ -211,9 +236,9 @@ everything else → Backstage) — neither backend is a hard dependency.
 ## Testing
 
 ```sh
-cargo test                                        # 171 Rust tests (real git, real PTYs, mock Backstage, fake gh, fault injection)
+cargo test                                        # 180 Rust tests (real git, real PTYs, mock Backstage, fake gh, a real workspace server, fault injection)
 cd apps/desktop && npm test                       # UI unit tests (vitest)
-cd apps/desktop && npm run e2e                    # 14 Playwright flows: real daemon + mock Backstage + gh shim + real Chromium
+cd apps/desktop && npm run e2e                    # 20 Playwright flows: real daemon + real openade-server + mock Backstage + gh shim + real Chromium
 ```
 
 Product-code line coverage is 100% on both the Rust workspace and the UI —
@@ -230,7 +255,8 @@ Tauri-shell compile check. Releases are automatic: every push to main reads the 
 - **No model access in our code.** You authenticate each harness through its
   own CLI; OpenADE never proxies API keys.
 - **Local-first.** Transcripts and session state stay on your machine unless
-  you explicitly publish a knowledge artifact (as a reviewable Git branch).
+  you explicitly publish a knowledge artifact (as a reviewable Git branch)
+  or explicitly share a session to your team's self-hosted workspace.
 - **Two swappable layers.** Harnesses behind adapters; catalogs behind
   `CatalogProvider`. No lock-in on either side.
 

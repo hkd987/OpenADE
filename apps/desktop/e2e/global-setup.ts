@@ -27,6 +27,8 @@ export default function prepareWorld() {
   // A second, unconfigured daemon world for the first-run onboarding flow
   // (the main daemon has memory env vars set, which counts as onboarded).
   fs.mkdirSync(path.join(tmpDir, "data-onboarding"), { recursive: true });
+  // Fresh state for the multiplayer workspace server.
+  fs.mkdirSync(path.join(tmpDir, "server-data"), { recursive: true });
 
   // Fixture repository.
   const repo = path.join(tmpDir, "fixture-repo");

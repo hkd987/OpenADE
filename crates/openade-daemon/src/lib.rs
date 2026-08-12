@@ -13,6 +13,7 @@ pub mod memory_repo;
 pub mod pty;
 pub mod server;
 pub mod transcript;
+pub mod workspace;
 pub mod worktree;
 
 pub use daemon::Daemon;

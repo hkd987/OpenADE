@@ -4,9 +4,9 @@ Three layers, all wired into CI (`.github/workflows/ci.yml`):
 
 | Layer | What runs | Command |
 |---|---|---|
-| Rust unit/integration | 171 tests across the workspace — real git repos (worktrees, artifact branches), real PTYs (spawned shells), real HTTP routers (tower `oneshot`), mock Backstage (`wiremock`), fake `gh` CLI shims (GitHub memory source + a stateful contents-API shim for the shared team memory repo), and real fault injection (corrupt SQLite, failing git, truncated HTTP bodies, failing gh) | `cargo test` |
+| Rust unit/integration | 180 tests across the workspace — real git repos (worktrees, artifact branches), real PTYs (spawned shells), real HTTP routers (tower `oneshot`), a real `openade-server` booted in-process for the multiplayer client/share/pickup tests, mock Backstage (`wiremock`), fake `gh` CLI shims (GitHub memory source + a stateful contents-API shim for the shared team memory repo), and real fault injection (corrupt SQLite, failing git, truncated HTTP bodies, failing gh, unreachable/revoked workspace server) | `cargo test` |
 | UI unit | vitest + testing-library: API client and every component (App, session card, launch form, session detail, terminal) | `cd apps/desktop && npm test` |
-| End-to-end | 14 Playwright tests drive real Chromium against the real daemon (`cargo run`), a mock Backstage, a `gh` CLI shim, and the Vite dev server; harness CLIs are shims created per run | `cd apps/desktop && npm run e2e` |
+| End-to-end | 20 Playwright tests drive real Chromium against the real daemon (`cargo run`), a real `openade-server` (fresh data dir per run), a mock Backstage, a `gh` CLI shim, and the Vite dev server; harness CLIs are shims created per run | `cd apps/desktop && npm run e2e` |
 
 ## End-to-end flow matrix
 
@@ -28,6 +28,18 @@ Every user-facing flow has an e2e test (`apps/desktop/e2e/session-flows.spec.ts`
 | First-run onboarding: welcome flow → gh status → settings applied live + persisted (separate unconfigured daemon) | `first startup onboards the user and applies settings live` (`onboarding.spec.ts`) |
 | Header affordances: health dot, ⌘K palette jump, Projects view, settings dialog | `header affordances: palette, projects view, settings` |
 
+Multiplayer flows run against a real `openade-server`
+(`apps/desktop/e2e/team.spec.ts`):
+
+| Flow | Test |
+|---|---|
+| Admin mints a member token + creates the workspace over HTTP (bad token → 401) | `admin mints a member token and creates the team workspace` |
+| Settings dialog connects the daemon (unconfigured Team view explains the fix first) | `the settings dialog connects the daemon to the workspace` |
+| Share button uploads the harness-neutral record (verified server-side) | `sharing a session publishes it to the team workspace` |
+| Team view lists sharer/harness/entity; read-only artifact + transcript viewer | `the Team view browses the shared record` |
+| Cross-harness pickup: Claude Code record → Copilot CLI session with `AGENTS.md` + `.openade/pickup.md` | `anyone can pick the session up in a different harness` |
+| Revoked token → actionable error banner → fresh token recovers | `a revoked token turns into an actionable Team view error` |
+
 Endpoint-level flows without UI affordances (worktree cleanup with the dirty
 guard, error statuses, entity-filtered listings) are covered end-to-end at
 the HTTP layer inside the Rust suite (`server_tests.rs`) and in the
@@ -47,8 +59,8 @@ the HTTP layer inside the Rust suite (`server_tests.rs`) and in the
 
 ## Coverage
 
-**Rust product code: 100% line coverage** (all 2,739 instrumented lines
-across all 19 product source files execute under `cargo test`), measured
+**Rust product code: 100% line coverage** (all 3,378 instrumented lines
+across all 22 product source files execute under `cargo test`), measured
 with `cargo llvm-cov` in lcov line accounting:
 
 ```

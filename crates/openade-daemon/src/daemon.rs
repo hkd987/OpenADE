@@ -73,6 +73,20 @@ pub struct HandoffRequest {
     pub command_override: Option<CommandSpec>,
 }
 
+/// Request to pick up a shared workspace session locally (any harness).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct PickupRequest {
+    /// The shared session id on the workspace server.
+    pub workspace_session_id: i64,
+    pub harness: Harness,
+    pub repo_root: PathBuf,
+    #[serde(default)]
+    pub checkout: CheckoutMode,
+    /// Testing/backdoor, as in [`LaunchSessionRequest`].
+    #[serde(default)]
+    pub command_override: Option<CommandSpec>,
+}
+
 /// Errors from the daemon's session lifecycle.
 #[derive(Debug, thiserror::Error)]
 pub enum DaemonError {
@@ -90,6 +104,8 @@ pub enum DaemonError {
     Io(#[from] std::io::Error),
     #[error("session runs in the repository's main checkout; there is no worktree to remove")]
     MainCheckout,
+    #[error("{0}")]
+    Workspace(String),
 }
 
 /// Memory wiring, replaceable at runtime (onboarding saves settings and
@@ -288,6 +304,7 @@ impl Daemon {
             Ok(mut bundle) => {
                 self.add_shared_memory(&mut bundle, entity_ref, repo_root)
                     .await;
+                self.add_workspace_memory(&mut bundle, entity_ref).await;
                 Some(bundle)
             }
             Err(e) => {
@@ -368,6 +385,152 @@ impl Daemon {
                 summary: line.trim_start_matches("- ").to_string(),
             });
         }
+    }
+
+    /// Fold the multiplayer workspace into a bundle: teammates' shared
+    /// sessions on this entity become prior-session context, and the
+    /// workspace is linked. Degrades silently — the server being down
+    /// never blocks a launch.
+    async fn add_workspace_memory(&self, bundle: &mut ContextBundle, entity_ref: &str) {
+        const MAX_SHARED: usize = 3;
+        let Some(client) = self.workspace_client() else {
+            return;
+        };
+        bundle.docs.push(DocLink {
+            title: format!("Team workspace #{}", client.workspace_id),
+            url: format!("{}/workspaces/{}", client.base_url, client.workspace_id),
+        });
+        match client.sessions(Some(entity_ref)).await {
+            Ok(sessions) => {
+                for s in sessions.into_iter().take(MAX_SHARED) {
+                    bundle.prior_sessions.push(PriorSessionSummary {
+                        session_id: format!("workspace-{}", s.id),
+                        harness: Some(s.harness),
+                        completed_at: None,
+                        summary: format!("{} — {} (shared by {})", s.title, s.summary, s.shared_by),
+                    });
+                }
+            }
+            Err(e) => tracing::warn!("workspace read-back unavailable: {e}"),
+        }
+    }
+
+    /// The configured multiplayer workspace connection, if any.
+    pub fn workspace_client(&self) -> Option<crate::workspace::WorkspaceClient> {
+        self.settings().effective_workspace()
+    }
+
+    /// Share a session to the team workspace (Xirp-style manual upload):
+    /// the harness-neutral record — meta, summary, artifact markdown, and
+    /// transcript events — goes to the server; nothing is uploaded unless
+    /// this is called.
+    pub async fn share(&self, id: Uuid) -> Result<crate::workspace::WorkspaceSession, DaemonError> {
+        use crate::artifact::{Summarizer, TemplateSummarizer};
+        let client = self.workspace_client().ok_or_else(|| {
+            DaemonError::Workspace(
+                "no workspace server configured — set the server URL, member token, \
+                 and workspace in Settings"
+                    .into(),
+            )
+        })?;
+        let meta = self.get(id)?;
+        let events = self.store.read_transcript(id)?;
+        let diff = self.diff(id)?;
+        let summarizer = TemplateSummarizer;
+        let record = serde_json::json!({
+            "title": meta.title,
+            "harness": meta.harness.id(),
+            "entity_ref": meta.entity_ref,
+            "branch": meta.branch,
+            "summary": summarizer.summary_line(&meta, &events, &diff),
+            "markdown": summarizer.summarize(&meta, &events, &diff),
+            "events": events,
+        });
+        client.upload(&record).await.map_err(DaemonError::Workspace)
+    }
+
+    /// Pick up a shared workspace session as a new local session — in any
+    /// harness. The server record is harness-neutral; this renders it for
+    /// the chosen harness: context via its rules file (launch path),
+    /// history via `.openade/pickup.md`, and the takeover instruction via
+    /// the adapter's own prompt convention.
+    pub async fn pickup(&self, req: PickupRequest) -> Result<SessionMeta, DaemonError> {
+        let client = self
+            .workspace_client()
+            .ok_or_else(|| DaemonError::Workspace("no workspace server configured".into()))?;
+        let shared = client
+            .session(req.workspace_session_id)
+            .await
+            .map_err(DaemonError::Workspace)?;
+
+        let mut doc = format!(
+            "# Picking up: {}
+
+Shared by **{}** (originally run on {}), uploaded {}.
+
+## Summary
+
+{}
+
+## Full session record
+
+{}
+",
+            shared.session.title,
+            shared.session.shared_by,
+            shared.session.harness,
+            shared.session.uploaded_at,
+            shared.session.summary,
+            shared.markdown,
+        );
+        if let Some(prompts) = shared.events.as_array() {
+            let asked: Vec<&str> = prompts
+                .iter()
+                .filter(|e| e["kind"] == "prompt")
+                .filter_map(|e| e["payload"]["text"].as_str())
+                .collect();
+            if !asked.is_empty() {
+                doc.push_str(
+                    "
+## Original prompts
+
+",
+                );
+                for p in asked {
+                    doc.push_str(&format!(
+                        "> {p}
+"
+                    ));
+                }
+            }
+        }
+
+        let prompt = format!(
+            "You are picking up the shared team session {:?} where it left off. Read \
+             .openade/pickup.md for the full context and continue the work.",
+            shared.session.title
+        );
+        let launch = LaunchSessionRequest {
+            title: format!("pickup: {}", shared.session.title),
+            harness: req.harness,
+            repo_root: req.repo_root,
+            checkout: req.checkout,
+            entity_ref: shared.session.entity_ref.clone(),
+            prompt: Some(prompt),
+            mcp_servers: Vec::new(),
+            command_override: req.command_override,
+        };
+        let meta = self.launch(launch, None)?;
+        // Launched sessions always have a working directory (worktree or
+        // the repo itself in main-checkout mode).
+        let wt = meta
+            .worktree_path
+            .clone()
+            .expect("launched session has a workdir");
+        let dot = wt.join(".openade");
+        fs::create_dir_all(&dot)?;
+        fs::write(dot.join("pickup.md"), &doc)?;
+        Ok(meta)
     }
 
     /// Summaries of the most recent sessions on an entity (G3: every session

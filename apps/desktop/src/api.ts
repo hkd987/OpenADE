@@ -114,6 +114,38 @@ export interface ArtifactInfo {
   shared_path?: string;
 }
 
+/** A session shared to the team workspace (multiplayer). */
+export interface WorkspaceSession {
+  id: number;
+  title: string;
+  harness: string;
+  entity_ref?: string | null;
+  summary: string;
+  shared_by: string;
+  uploaded_at: string;
+}
+
+/** One transcript event in a shared session's harness-neutral record. */
+export interface WorkspaceEvent {
+  kind: string;
+  payload?: { text?: string };
+}
+
+/** Full record of a shared session (read-only Team viewer). */
+export interface WorkspaceSessionDetail {
+  session: WorkspaceSession;
+  markdown: string;
+  events: WorkspaceEvent[];
+}
+
+/** Pick a shared session up as a new local session (any harness). */
+export interface PickupRequest {
+  workspace_session_id: number;
+  harness: Harness;
+  repo_root: string;
+  checkout?: CheckoutMode;
+}
+
 const DAEMON_URL =
   (import.meta as { env?: Record<string, string> }).env
     ?.VITE_OPENADE_DAEMON_URL ?? "http://127.0.0.1:7433";
@@ -148,6 +180,10 @@ export interface DaemonConfig {
   memory_sources: string[];
   gh_found: boolean;
   gh_authenticated: boolean | null;
+  server_url: string | null;
+  server_token_set: boolean;
+  server_workspace: number | null;
+  workspace_configured: boolean;
 }
 
 /** Settings the onboarding flow saves; env vars still win daemon-side. */
@@ -156,6 +192,10 @@ export interface ConfigUpdate {
   backstage_token?: string;
   memory_repo?: string;
   onboarded: boolean;
+  server_url?: string;
+  /** Absent = keep the stored member token (like backstage_token). */
+  server_token?: string;
+  server_workspace?: number;
 }
 
 export function getConfig(): Promise<DaemonConfig> {
@@ -220,6 +260,31 @@ export function listProjects(): Promise<{ projects: string[] }> {
 
 export function publishArtifact(id: string): Promise<ArtifactInfo> {
   return request(`/sessions/${id}/artifact`, { method: "POST", body: "{}" });
+}
+
+export function shareSession(id: string): Promise<WorkspaceSession> {
+  return request(`/sessions/${id}/share`, { method: "POST", body: "{}" });
+}
+
+export function pickupSession(req: PickupRequest): Promise<SessionMeta> {
+  return request("/sessions/pickup", {
+    method: "POST",
+    body: JSON.stringify(req),
+  });
+}
+
+export function listWorkspaceSessions(
+  entity?: string,
+): Promise<{ sessions: WorkspaceSession[] }> {
+  const query =
+    entity !== undefined ? `?entity=${encodeURIComponent(entity)}` : "";
+  return request(`/workspace/sessions${query}`);
+}
+
+export function getWorkspaceSession(
+  sid: number,
+): Promise<WorkspaceSessionDetail> {
+  return request(`/workspace/sessions/${sid}`);
 }
 
 export function handoffSession(

@@ -137,7 +137,7 @@ The only integrated solution (Xirp) locks the context layer to Spotify's commerc
 - Additional catalog providers (Port, Cortex, Git-native YAML catalog).
 - Cost/model routing across harnesses.
 - Governance hooks: session telemetry export for policy/audit tooling.
-- Team/multi-user server mode — **explicitly out of scope for this repository**; do not design toward or implement it here.
+- ~~Team/multi-user server mode~~ — the **asynchronous** workspace hub shipped as `crates/openade-server` (self-hosted; share, browse, cross-harness pickup — see [multiplayer.md](multiplayer.md)). *Live* shared sessions (real-time observation, co-driving, presence) remain **explicitly out of scope for this repository**.
 
 ## 7. Technical Design
 

@@ -12,6 +12,9 @@ fn settings_round_trip_and_tolerate_missing_or_corrupt_files() {
         backstage_token: Some("s3cret".into()),
         memory_repo: Some("acme/team-memory".into()),
         onboarded: true,
+        server_url: Some("http://127.0.0.1:7500".into()),
+        server_token: Some("tok".into()),
+        server_workspace: Some(1),
     };
     settings.save(tmp.path()).unwrap();
     assert_eq!(Settings::load(tmp.path()), settings);
@@ -36,6 +39,9 @@ fn env_wins_over_stored_settings() {
         backstage_token: Some("stored-token".into()),
         memory_repo: Some("stored/repo".into()),
         onboarded: false,
+        server_url: None,
+        server_token: None,
+        server_workspace: None,
     };
 
     // No env: stored settings are effective.
@@ -78,6 +84,9 @@ fn env_wins_over_stored_settings() {
         backstage_token: Some(String::new()),
         memory_repo: Some(String::new()),
         onboarded: true,
+        server_url: Some(String::new()),
+        server_token: Some(String::new()),
+        server_workspace: None,
     };
     assert!(empty.effective_backstage().is_none());
     assert!(empty.effective_memory_repo().is_none());

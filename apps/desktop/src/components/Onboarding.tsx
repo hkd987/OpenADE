@@ -32,6 +32,15 @@ export function Onboarding({
   const [memoryRepo, setMemoryRepo] = useState(
     settings ? (config.memory_repo ?? "") : "",
   );
+  const [serverUrl, setServerUrl] = useState(
+    settings ? (config.server_url ?? "") : "",
+  );
+  const [serverToken, setServerToken] = useState("");
+  const [serverWorkspace, setServerWorkspace] = useState(
+    settings && config.server_workspace !== null
+      ? String(config.server_workspace)
+      : "",
+  );
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -51,6 +60,14 @@ export function Onboarding({
                 settings && backstageToken === "" ? undefined : backstageToken,
               memory_repo: memoryRepo,
               onboarded: true,
+              server_url: serverUrl,
+              // Same keep-when-untouched semantics as the Backstage token.
+              server_token:
+                settings && serverToken === "" ? undefined : serverToken,
+              server_workspace:
+                serverWorkspace.trim() === ""
+                  ? undefined
+                  : Number(serverWorkspace),
             },
       );
       onDone();
@@ -148,6 +165,51 @@ export function Onboarding({
             A GitHub repo the whole team can push to — session knowledge
             lands there for everyone. Teams can also commit
             <code> .openade/memory-repo</code> per project.
+          </span>
+        </div>
+
+        <h3 className="onboarding-section">
+          Multiplayer — self-hosted server (optional)
+        </h3>
+        <div className="form-row">
+          <label htmlFor="ob-server-url">Workspace server URL</label>
+          <input
+            id="ob-server-url"
+            value={serverUrl}
+            onChange={(e) => setServerUrl(e.target.value)}
+            placeholder="http://openade.internal:7500"
+            data-testid="ob-server-url"
+          />
+        </div>
+        <div className="form-row">
+          <label htmlFor="ob-server-token">Member token</label>
+          <input
+            id="ob-server-token"
+            type="password"
+            value={serverToken}
+            onChange={(e) => setServerToken(e.target.value)}
+            placeholder={
+              settings && config.server_token_set
+                ? "(unchanged — type to replace)"
+                : "oadk_…"
+            }
+            data-testid="ob-server-token"
+          />
+        </div>
+        <div className="form-row">
+          <label htmlFor="ob-server-workspace">Workspace id</label>
+          <input
+            id="ob-server-workspace"
+            inputMode="numeric"
+            value={serverWorkspace}
+            onChange={(e) => setServerWorkspace(e.target.value)}
+            placeholder="1"
+            data-testid="ob-server-workspace"
+          />
+          <span className="form-hint">
+            Share sessions to a team workspace on a self-hosted{" "}
+            <code>openade-server</code> — teammates can browse and pick any
+            shared session up in their own harness.
           </span>
         </div>
 

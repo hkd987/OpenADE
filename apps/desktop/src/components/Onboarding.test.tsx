@@ -19,6 +19,10 @@ const base: DaemonConfig = {
   memory_sources: ["github"],
   gh_found: true,
   gh_authenticated: true,
+  server_url: null,
+  server_token_set: false,
+  server_workspace: null,
+  workspace_configured: false,
 };
 
 describe("Onboarding", () => {
@@ -73,12 +77,21 @@ describe("Onboarding", () => {
     );
     await userEvent.type(screen.getByTestId("ob-backstage-token"), "tok");
     await userEvent.type(screen.getByTestId("ob-memory-repo"), "acme/memory");
+    await userEvent.type(
+      screen.getByTestId("ob-server-url"),
+      "http://hub:7500",
+    );
+    await userEvent.type(screen.getByTestId("ob-server-token"), "oadk_x");
+    await userEvent.type(screen.getByTestId("ob-server-workspace"), "2");
     await userEvent.click(screen.getByTestId("ob-save"));
     expect(putConfig).toHaveBeenCalledWith({
       backstage_base_url: "https://backstage.example.com",
       backstage_token: "tok",
       memory_repo: "acme/memory",
       onboarded: true,
+      server_url: "http://hub:7500",
+      server_token: "oadk_x",
+      server_workspace: 2,
     });
     expect(onDone).toHaveBeenCalled();
   });
@@ -105,6 +118,10 @@ describe("Onboarding", () => {
           backstage_base_url: "https://backstage.example.com",
           backstage_token_set: true,
           memory_repo: "acme/team-memory",
+          server_url: "http://hub:7500",
+          server_token_set: true,
+          server_workspace: 3,
+          workspace_configured: true,
         }}
         onDone={onDone}
         onClose={onClose}
@@ -121,16 +138,28 @@ describe("Onboarding", () => {
       "placeholder",
       "(unchanged — type to replace)",
     );
+    // Multiplayer fields prefill too; the member token is never echoed.
+    expect(screen.getByTestId("ob-server-url")).toHaveValue(
+      "http://hub:7500",
+    );
+    expect(screen.getByTestId("ob-server-workspace")).toHaveValue("3");
+    expect(screen.getByTestId("ob-server-token")).toHaveAttribute(
+      "placeholder",
+      "(unchanged — type to replace)",
+    );
     expect(screen.getByTestId("ob-sources")).toHaveTextContent("github");
 
-    // Saving without touching the token omits it — the daemon keeps the
-    // stored one.
+    // Saving without touching the tokens omits them — the daemon keeps the
+    // stored ones.
     await userEvent.click(screen.getByTestId("ob-save"));
     expect(putConfig).toHaveBeenCalledWith({
       backstage_base_url: "https://backstage.example.com",
       backstage_token: undefined,
       memory_repo: "acme/team-memory",
       onboarded: true,
+      server_url: "http://hub:7500",
+      server_token: undefined,
+      server_workspace: 3,
     });
     expect(onDone).toHaveBeenCalled();
     expect(onClose).not.toHaveBeenCalled();
@@ -162,9 +191,13 @@ describe("Onboarding", () => {
       />,
     );
     await userEvent.type(screen.getByTestId("ob-backstage-token"), "new-tok");
+    await userEvent.type(screen.getByTestId("ob-server-token"), "oadk_new");
     await userEvent.click(screen.getByTestId("ob-save"));
     expect(putConfig).toHaveBeenCalledWith(
-      expect.objectContaining({ backstage_token: "new-tok" }),
+      expect.objectContaining({
+        backstage_token: "new-tok",
+        server_token: "oadk_new",
+      }),
     );
   });
 

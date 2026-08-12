@@ -15,7 +15,7 @@ use axum::{Json, Router};
 use serde::Deserialize;
 use uuid::Uuid;
 
-use crate::daemon::{Daemon, DaemonError, LaunchSessionRequest};
+use crate::daemon::{Daemon, DaemonError, LaunchSessionRequest, PickupRequest};
 
 /// Build the API router around a daemon.
 pub fn router(daemon: Arc<Daemon>) -> Router {
@@ -31,6 +31,10 @@ pub fn router(daemon: Arc<Daemon>) -> Router {
         .route("/sessions/{id}/file", get(get_file))
         .route("/sessions/{id}/skills", get(get_skills))
         .route("/projects/prs", get(get_project_prs))
+        .route("/sessions/{id}/share", post(post_share))
+        .route("/sessions/pickup", post(post_pickup))
+        .route("/workspace/sessions", get(workspace_sessions))
+        .route("/workspace/sessions/{sid}", get(workspace_session))
         .route("/sessions/{id}/artifact", post(post_artifact))
         .route("/sessions/{id}/handoff", post(post_handoff))
         .route("/projects", get(list_projects))
@@ -55,6 +59,7 @@ impl From<DaemonError> for ApiError {
             DaemonError::NotFound(_) => StatusCode::NOT_FOUND,
             DaemonError::Worktree(crate::worktree::WorktreeError::Dirty(_)) => StatusCode::CONFLICT,
             DaemonError::MainCheckout => StatusCode::CONFLICT,
+            DaemonError::Workspace(_) => StatusCode::BAD_GATEWAY,
             _ => StatusCode::INTERNAL_SERVER_ERROR,
         };
         ApiError(status, err.to_string())
@@ -85,6 +90,11 @@ fn config_status(daemon: &Daemon) -> serde_json::Value {
         "memory_sources": daemon.memory_sources(),
         "gh_found": gh_bin.is_some(),
         "gh_authenticated": gh_authenticated,
+        "server_url": settings.server_url,
+        "server_token_set": settings.server_token.as_deref().is_some_and(|t| !t.is_empty())
+            || std::env::var(crate::workspace::SERVER_TOKEN_ENV).is_ok_and(|v| !v.is_empty()),
+        "server_workspace": settings.server_workspace,
+        "workspace_configured": settings.effective_workspace().is_some(),
     })
 }
 
@@ -115,6 +125,9 @@ async fn put_config(
     if settings.backstage_token.is_none() {
         settings.backstage_token = daemon.settings().backstage_token;
     }
+    if settings.server_token.is_none() {
+        settings.server_token = daemon.settings().server_token;
+    }
     let result = tokio::task::spawn_blocking(move || {
         daemon
             .apply_settings(settings)
@@ -126,6 +139,70 @@ async fn put_config(
         Ok(status) => Ok(Json(status)),
         Err(e) => Err(ApiError(StatusCode::INTERNAL_SERVER_ERROR, e)),
     }
+}
+
+/// Share a session's harness-neutral record to the team workspace.
+async fn post_share(
+    State(daemon): State<Arc<Daemon>>,
+    Path(id): Path<Uuid>,
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    let shared = daemon.share(id).await?;
+    Ok((
+        StatusCode::CREATED,
+        Json(serde_json::to_value(shared).unwrap()),
+    ))
+}
+
+/// Pick a shared workspace session up as a new local session (any harness).
+async fn post_pickup(
+    State(daemon): State<Arc<Daemon>>,
+    Json(req): Json<PickupRequest>,
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    let meta = daemon.pickup(req).await?;
+    Ok((
+        StatusCode::CREATED,
+        Json(serde_json::to_value(meta).unwrap()),
+    ))
+}
+
+#[derive(Deserialize)]
+struct WorkspaceListQuery {
+    entity: Option<String>,
+}
+
+/// Team view data: the workspace's shared sessions, proxied through the
+/// daemon (which holds the member token — it never reaches the browser).
+async fn workspace_sessions(
+    State(daemon): State<Arc<Daemon>>,
+    Query(q): Query<WorkspaceListQuery>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let client = daemon
+        .workspace_client()
+        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "no workspace configured".into()))?;
+    let sessions = client
+        .sessions(q.entity.as_deref())
+        .await
+        .map_err(|e| ApiError(StatusCode::BAD_GATEWAY, e))?;
+    Ok(Json(serde_json::json!({ "sessions": sessions })))
+}
+
+/// One shared session's full record (read-only viewer).
+async fn workspace_session(
+    State(daemon): State<Arc<Daemon>>,
+    Path(sid): Path<i64>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let client = daemon
+        .workspace_client()
+        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "no workspace configured".into()))?;
+    let detail = client
+        .session(sid)
+        .await
+        .map_err(|e| ApiError(StatusCode::BAD_GATEWAY, e))?;
+    Ok(Json(serde_json::json!({
+        "session": detail.session,
+        "markdown": detail.markdown,
+        "events": detail.events,
+    })))
 }
 
 #[derive(Deserialize)]
