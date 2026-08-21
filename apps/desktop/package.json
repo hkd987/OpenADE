@@ -5,10 +5,10 @@
   "description": "OpenADE Wails desktop shell for local agent sessions, worktrees, tickets, and pull requests",
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "tsc --noEmit && vite build",
+    "dev": "vite --configLoader native",
+    "build": "tsc --noEmit && vite build --configLoader native",
     "preview": "vite preview",
-    "test": "vitest run",
+    "test": "vitest run --configLoader native",
     "e2e": "playwright test"
   },
   "dependencies": {

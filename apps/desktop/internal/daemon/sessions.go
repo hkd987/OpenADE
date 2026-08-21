@@ -127,11 +127,14 @@ func (m *SessionManager) launch(session Session) error {
 func agentCommand(session Session) (string, []string, string, error) {
 	agent := strings.ToLower(session.Agent)
 	if agent == "shell" {
+		if strings.TrimSpace(session.Prompt) != "" {
+			return "/bin/sh", []string{"-lc", session.Prompt}, "", nil
+		}
 		shell := os.Getenv("SHELL")
 		if shell == "" {
 			shell = "/bin/zsh"
 		}
-		return shell, []string{"-l"}, session.Prompt, nil
+		return shell, []string{"-l"}, "", nil
 	}
 	name := map[string]string{"claude-code": "claude", "codex-cli": "codex", "github-copilot": "copilot"}[agent]
 	if name == "" {

@@ -100,6 +100,22 @@ memory repo immediately:
 
 ## Install
 
+**Current Go/Wails desktop (macOS developer build):** requires Go 1.26+ with
+CGO enabled, Node.js 20+, npm, and Wails CLI 2.10.2. It runs one durable local
+daemon for all PTYs, worktrees, session indexing, tickets, and pull requests.
+
+```sh
+cd apps/desktop
+npm ci
+go install github.com/wailsapp/wails/v2/cmd/wails@v2.10.2
+CGO_ENABLED=1 "$(go env GOPATH)/bin/wails" build
+open build/bin/OpenADE.app
+```
+
+For live UI development, replace `build` with `dev`. The desktop shell starts
+or reconnects to the daemon on `127.0.0.1:7433`; closing the window does not
+terminate active agent sessions.
+
 **From a release** (Linux x86_64/aarch64, macOS Intel/Apple Silicon):
 download the tarball for your platform from
 [GitHub Releases](https://github.com/hkd987/OpenADE/releases), verify the
