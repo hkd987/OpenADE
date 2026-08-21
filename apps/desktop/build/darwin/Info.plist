@@ -21,6 +21,12 @@
         <string>10.13.0</string>
         <key>NSHighResolutionCapable</key>
         <string>true</string>
+        <key>NSDocumentsFolderUsageDescription</key>
+        <string>OpenADE needs access to repositories you select in Documents so it can create isolated git worktrees.</string>
+        <key>NSDownloadsFolderUsageDescription</key>
+        <string>OpenADE needs access to repositories you select in Downloads so it can create isolated git worktrees.</string>
+        <key>NSDesktopFolderUsageDescription</key>
+        <string>OpenADE needs access to repositories you select on the Desktop so it can create isolated git worktrees.</string>
         <key>NSHumanReadableCopyright</key>
         <string>{{.Info.Copyright}}</string>
         {{if .Info.FileAssociations}}

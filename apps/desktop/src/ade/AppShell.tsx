@@ -160,6 +160,7 @@ function AppShell() {
       <main className="main-shell">
         <button className="sidebar-toggle icon-button" onClick={() => setSidebarOpen((value) => !value)} aria-label="Toggle sidebar"><SidebarSimple size={18} /></button>
         {!connected && <div className="connection-banner"><SpinnerGap className="spin" /> Connecting to the local daemon… {error}</div>}
+        {connected && error && <button className="error-toast" onClick={() => setError(null)}><span>{error}</span><X /></button>}
         {selected ? (
           <SessionWorkspace session={selected} onBack={() => setSelectedId(null)} onRefresh={refresh} />
         ) : page === "home" ? (
@@ -210,6 +211,15 @@ function Home({ sessions, projects, meta, onCreated, onOpen, onError }: { sessio
     } finally { setBusy(false); }
   };
 
+  const browse = async () => {
+    try {
+      const selected = await selectRepository();
+      if (selected) setRepo(selected);
+    } catch (reason) {
+      onError(reason instanceof Error ? reason.message : String(reason));
+    }
+  };
+
   const active = sessions.filter((item) => ["starting", "running", "waiting"].includes(item.status));
   return <div className="home-page">
     <div className="home-topline"><span className="eyebrow">Local agent workspace</span><span className="shortcut"><Command size={12} /> K to focus</span></div>
@@ -225,7 +235,7 @@ function Home({ sessions, projects, meta, onCreated, onOpen, onError }: { sessio
         <div className="composer-toolbar">
           <div className="composer-left">
             <button type="button" className={`round-action ${optionsOpen ? "active" : ""}`} onClick={() => setOptionsOpen((value) => !value)}><Plus size={17} /></button>
-            <label className="select-chip"><GitBranch size={15} /><input list="project-list" value={repo} onChange={(event) => setRepo(event.target.value)} placeholder="Choose repository" /></label>
+            <div className="select-chip"><GitBranch size={15} /><input list="project-list" value={repo} onChange={(event) => setRepo(event.target.value)} placeholder="Choose repository" /><button type="button" className="browse-repo" onClick={browse}>Browse</button></div>
             <datalist id="project-list">{projects.map((project) => <option value={project} key={project} />)}</datalist>
           </div>
           <div className="composer-right">
@@ -355,6 +365,16 @@ function stripANSI(value: string): string { return value.replace(/\x1B(?:[@-_][0
 function cleanTranscript(value: string): string {
   const lines = value.split("\n").map((line) => line.replace(/[^\x09\x20-\x7E\u00A0-\uFFFF]/g, "").trimEnd()).filter((line, index, all) => line.trim() || (index > 0 && all[index - 1].trim()));
   return lines.slice(-220).join("\n");
+}
+
+async function selectRepository(): Promise<string> {
+  const bridge = window as typeof window & {
+    go?: { main?: { App?: { SelectRepository?: () => Promise<string> } } };
+  };
+  if (bridge.go?.main?.App?.SelectRepository) {
+    return bridge.go.main.App.SelectRepository();
+  }
+  throw new Error("Folder selection is available in the Wails desktop build.");
 }
 
 export default AppShell;

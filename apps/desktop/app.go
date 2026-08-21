@@ -56,6 +56,16 @@ func (a *App) OpenExternal(url string) {
 	}
 }
 
+func (a *App) SelectRepository() (string, error) {
+	if a.ctx == nil {
+		return "", fmt.Errorf("desktop window is not ready")
+	}
+	return runtime.OpenDirectoryDialog(a.ctx, runtime.OpenDialogOptions{
+		Title:                "Choose a Git repository",
+		CanCreateDirectories: true,
+	})
+}
+
 func ensureDaemon() error {
 	client := &http.Client{Timeout: 350 * time.Millisecond}
 	if healthy(client) {

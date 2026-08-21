@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os/exec"
 	"path/filepath"
@@ -16,12 +17,17 @@ import (
 var branchUnsafe = regexp.MustCompile(`[^a-zA-Z0-9._/-]+`)
 
 func gitOutput(ctx context.Context, repo string, args ...string) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
 	commandArgs := append([]string{"-C", repo}, args...)
 	cmd := exec.CommandContext(ctx, "git", commandArgs...)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
 	if err != nil {
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return "", fmt.Errorf("git %s timed out while accessing %s", strings.Join(args, " "), repo)
+		}
 		return "", fmt.Errorf("git %s: %s", strings.Join(args, " "), strings.TrimSpace(stderr.String()))
 	}
 	return strings.TrimSpace(string(out)), nil
@@ -56,10 +62,15 @@ func createWorktree(ctx context.Context, repo, path, branch, base string) error 
 	if base == "" {
 		base = "HEAD"
 	}
+	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
+	defer cancel()
 	cmd := exec.CommandContext(ctx, "git", "-C", repo, "worktree", "add", "-b", branch, path, base)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return fmt.Errorf("creating the worktree timed out; grant OpenADE access to the repository folder and retry")
+		}
 		return fmt.Errorf("create worktree: %s", strings.TrimSpace(stderr.String()))
 	}
 	return nil

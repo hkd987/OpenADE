@@ -42,6 +42,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .sidebar-toggle { position:fixed; left:8px; top:8px; z-index:10; opacity:0; pointer-events:none; }
 .sidebar-collapsed .sidebar-toggle { opacity:1; pointer-events:auto; }
 .connection-banner { position:fixed; z-index:20; top:10px; left:50%; transform:translateX(-50%); background:#3a2727; border:1px solid #744141; color:#f0b4b4; border-radius:999px; padding:7px 13px; font-size:11px; display:flex; align-items:center; gap:7px; max-width:70vw; }
+.error-toast { position:fixed; z-index:20; top:12px; right:16px; max-width:min(440px,70vw); border:1px solid #744141; background:#3a2727; color:#f0b4b4; border-radius:9px; padding:8px 10px; display:flex; align-items:center; gap:9px; font-size:10px; text-align:left; cursor:pointer; box-shadow:0 15px 50px #0008; }
+.error-toast span { overflow:hidden; text-overflow:ellipsis; }.error-toast svg { flex:0 0 auto; width:13px; }
 .spin { animation:spin .85s linear infinite; }
 @keyframes spin { to { transform:rotate(360deg); } }
 .home-page { max-width:980px; min-height:100%; margin:0 auto; padding:30px 30px 60px; }
@@ -66,6 +68,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .select-chip input,.select-chip select { min-width:0; max-width:250px; border:0; outline:0; background:transparent; color:var(--text); font-size:11.5px; }
 .select-chip input { width:220px; }
 .select-chip select { appearance:none; padding-right:5px; }
+.browse-repo { border:0; border-left:1px solid var(--line); background:transparent; color:var(--muted); padding:0 0 0 7px; font-size:9px; cursor:pointer; }
+.browse-repo:hover { color:var(--text); }
 .send-button { width:31px; height:31px; border:0; border-radius:50%; display:grid; place-items:center; background:#d6dadd; color:#17191b; cursor:pointer; }
 .send-button:disabled { background:var(--surface-3); color:var(--muted-2); cursor:default; }
 .send-button svg { width:15px; }
