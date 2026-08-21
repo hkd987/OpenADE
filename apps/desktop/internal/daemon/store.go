@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -15,6 +16,7 @@ type Session struct {
 	Title        string     `json:"title"`
 	Prompt       string     `json:"prompt"`
 	Agent        string     `json:"agent"`
+	Mode         string     `json:"mode"`
 	RepoRoot     string     `json:"repo_root"`
 	WorktreePath string     `json:"worktree_path"`
 	Branch       string     `json:"branch"`
@@ -105,6 +107,9 @@ CREATE INDEX IF NOT EXISTS terminals_session_idx ON terminals(session_id, create
 	if err != nil {
 		return fmt.Errorf("migrate sqlite: %w", err)
 	}
+	if _, alterErr := s.db.Exec(`ALTER TABLE sessions ADD COLUMN mode TEXT NOT NULL DEFAULT 'chat'`); alterErr != nil && !strings.Contains(alterErr.Error(), "duplicate column") {
+		return fmt.Errorf("add session mode: %w", alterErr)
+	}
 	_, err = s.db.Exec(`UPDATE sessions SET status = 'interrupted', pid = 0,
 updated_at = ? WHERE status IN ('starting', 'running', 'waiting')`, time.Now().UTC().Format(time.RFC3339Nano))
 	if err == nil {
@@ -116,8 +121,8 @@ updated_at = ? WHERE status IN ('starting', 'running')`, time.Now().UTC().Format
 
 func (s *Store) CreateSession(session Session) error {
 	_, err := s.db.Exec(`INSERT INTO sessions
-(id,title,prompt,agent,repo_root,worktree_path,branch,base_branch,ticket_key,ticket_url,status,pid,created_at,updated_at)
-VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, session.ID, session.Title, session.Prompt, session.Agent,
+(id,title,prompt,agent,mode,repo_root,worktree_path,branch,base_branch,ticket_key,ticket_url,status,pid,created_at,updated_at)
+VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, session.ID, session.Title, session.Prompt, session.Agent, session.Mode,
 		session.RepoRoot, session.WorktreePath, session.Branch, session.BaseBranch, session.TicketKey,
 		session.TicketURL, session.Status, session.PID, encodeTime(session.CreatedAt), encodeTime(session.UpdatedAt))
 	return err
@@ -140,7 +145,7 @@ func (s *Store) SetPR(id, url string) error {
 }
 
 func (s *Store) ListSessions() ([]Session, error) {
-	rows, err := s.db.Query(`SELECT id,title,prompt,agent,repo_root,worktree_path,branch,base_branch,
+	rows, err := s.db.Query(`SELECT id,title,prompt,agent,mode,repo_root,worktree_path,branch,base_branch,
 ticket_key,ticket_url,status,pid,exit_code,pr_url,created_at,updated_at,finished_at
 FROM sessions ORDER BY updated_at DESC`)
 	if err != nil {
@@ -159,7 +164,7 @@ FROM sessions ORDER BY updated_at DESC`)
 }
 
 func (s *Store) GetSession(id string) (Session, error) {
-	row := s.db.QueryRow(`SELECT id,title,prompt,agent,repo_root,worktree_path,branch,base_branch,
+	row := s.db.QueryRow(`SELECT id,title,prompt,agent,mode,repo_root,worktree_path,branch,base_branch,
 ticket_key,ticket_url,status,pid,exit_code,pr_url,created_at,updated_at,finished_at
 FROM sessions WHERE id=?`, id)
 	return scanSession(row)
@@ -232,7 +237,7 @@ func scanSession(row scanner) (Session, error) {
 	var created, updated string
 	var finished sql.NullString
 	var exitCode sql.NullInt64
-	err := row.Scan(&session.ID, &session.Title, &session.Prompt, &session.Agent, &session.RepoRoot,
+	err := row.Scan(&session.ID, &session.Title, &session.Prompt, &session.Agent, &session.Mode, &session.RepoRoot,
 		&session.WorktreePath, &session.Branch, &session.BaseBranch, &session.TicketKey, &session.TicketURL,
 		&session.Status, &session.PID, &exitCode, &session.PRURL, &created, &updated, &finished)
 	if err != nil {

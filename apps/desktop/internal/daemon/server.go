@@ -100,6 +100,7 @@ func (d *Daemon) routes() http.Handler {
 	mux.HandleFunc("GET /api/sessions/{id}/stream", d.handleStream)
 	mux.HandleFunc("POST /api/sessions/{id}/input", d.handleInput)
 	mux.HandleFunc("POST /api/sessions/{id}/messages", d.handleMessage)
+	mux.HandleFunc("POST /api/sessions/{id}/resume-tui", d.handleResumeTUI)
 	mux.HandleFunc("POST /api/sessions/{id}/resize", d.handleResize)
 	mux.HandleFunc("POST /api/sessions/{id}/stop", d.handleStop)
 	mux.HandleFunc("GET /api/sessions/{id}/diff", d.handleDiff)
@@ -242,6 +243,20 @@ func (d *Daemon) handleMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := d.sessions.Resume(session, body.Text); err != nil {
+		writeError(w, http.StatusConflict, err)
+		return
+	}
+	session, _ = d.store.GetSession(session.ID)
+	writeJSON(w, http.StatusAccepted, session)
+}
+
+func (d *Daemon) handleResumeTUI(w http.ResponseWriter, r *http.Request) {
+	session, err := d.store.GetSession(r.PathValue("id"))
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	if err := d.sessions.ResumeTUI(session); err != nil {
 		writeError(w, http.StatusConflict, err)
 		return
 	}

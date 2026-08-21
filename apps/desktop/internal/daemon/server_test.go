@@ -179,6 +179,69 @@ printf 'ARGS:%s\n' "$*"
 	}
 }
 
+func TestDirectTUIModeLaunchesAndResumesCodexInTheSessionPTY(t *testing.T) {
+	repo := createFixtureRepository(t)
+	binDir := t.TempDir()
+	fakeCodex := filepath.Join(binDir, "codex")
+	script := `#!/bin/sh
+printf 'TUI_ARGS:%s\n' "$*"
+`
+	if err := os.WriteFile(fakeCodex, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	d, err := New(Config{DataDir: t.TempDir(), Addr: "127.0.0.1:0"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.store.Close()
+
+	session, err := d.sessions.Create(context.Background(), CreateSessionRequest{
+		Title: "Direct TUI", Prompt: "inspect this repo", Agent: "codex", Mode: "tui", RepoRoot: repo, BaseBranch: "main",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	transcriptPath := filepath.Join(d.config.DataDir, "transcripts", session.ID+".log")
+	var transcript []byte
+	for time.Now().Before(deadline) {
+		transcript, _ = os.ReadFile(transcriptPath)
+		if strings.Contains(string(transcript), "TUI_ARGS:") {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !strings.Contains(string(transcript), "--no-alt-screen -C "+session.WorktreePath+" inspect this repo") {
+		t.Fatalf("direct TUI did not receive the project and prompt: %q", transcript)
+	}
+
+	deadline = time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		session, _ = d.store.GetSession(session.ID)
+		if session.Status == "completed" {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	response := httptest.NewRecorder()
+	d.routes().ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/sessions/"+session.ID+"/resume-tui", nil))
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("resume TUI status=%d body=%s", response.Code, response.Body.String())
+	}
+	deadline = time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		transcript, _ = os.ReadFile(transcriptPath)
+		if strings.Contains(string(transcript), "resume --last --no-alt-screen") {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !strings.Contains(string(transcript), "resume --last --no-alt-screen -C "+session.WorktreePath) {
+		t.Fatalf("direct TUI did not resume in the project: %q", transcript)
+	}
+}
+
 func TestCompletedCodexSessionCanResumeWithFollowUpMessage(t *testing.T) {
 	repo := createFixtureRepository(t)
 	binDir := t.TempDir()

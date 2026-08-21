@@ -24,6 +24,7 @@ type CreateSessionRequest struct {
 	Title      string `json:"title"`
 	Prompt     string `json:"prompt"`
 	Agent      string `json:"agent"`
+	Mode       string `json:"mode"`
 	RepoRoot   string `json:"repo_root"`
 	BaseBranch string `json:"base_branch"`
 	TicketKey  string `json:"ticket_key"`
@@ -59,6 +60,12 @@ func (m *SessionManager) Create(ctx context.Context, request CreateSessionReques
 	if request.Agent == "" {
 		request.Agent = "claude"
 	}
+	if request.Mode == "" {
+		request.Mode = "chat"
+	}
+	if request.Mode != "chat" && request.Mode != "tui" {
+		return Session{}, fmt.Errorf("session mode must be chat or tui")
+	}
 	if request.BaseBranch == "" {
 		request.BaseBranch = "HEAD"
 	}
@@ -77,7 +84,7 @@ func (m *SessionManager) Create(ctx context.Context, request CreateSessionReques
 		return Session{}, err
 	}
 	now := time.Now().UTC()
-	session := Session{ID: id, Title: request.Title, Prompt: request.Prompt, Agent: request.Agent,
+	session := Session{ID: id, Title: request.Title, Prompt: request.Prompt, Agent: request.Agent, Mode: request.Mode,
 		RepoRoot: repo, WorktreePath: worktree, Branch: branch, BaseBranch: request.BaseBranch,
 		TicketKey: strings.ToUpper(strings.TrimSpace(request.TicketKey)), TicketURL: request.TicketURL,
 		Status: "starting", CreatedAt: now, UpdatedAt: now}
@@ -158,6 +165,20 @@ func (m *SessionManager) Resume(session Session, prompt string) error {
 	return m.launchCommand(session, program, args)
 }
 
+func (m *SessionManager) ResumeTUI(session Session) error {
+	if session.Mode != "tui" {
+		return fmt.Errorf("session is not a direct TUI run")
+	}
+	if _, err := m.getLive(session.ID); err == nil {
+		return fmt.Errorf("session is already running")
+	}
+	program, args, err := tuiResumeCommand(session)
+	if err != nil {
+		return err
+	}
+	return m.launchCommand(session, program, args)
+}
+
 func resumeAgentCommand(session Session, providerID, prompt string) (string, []string, error) {
 	agent := strings.ToLower(session.Agent)
 	name := map[string]string{"claude-code": "claude", "codex-cli": "codex"}[agent]
@@ -222,6 +243,24 @@ func agentCommand(session Session) (string, []string, error) {
 	if err != nil {
 		return "", nil, err
 	}
+	if session.Mode == "tui" {
+		switch name {
+		case "codex":
+			args := []string{"--no-alt-screen", "-C", session.WorktreePath}
+			if session.Prompt != "" {
+				args = append(args, session.Prompt)
+			}
+			return program, args, nil
+		case "claude":
+			args := []string{"--permission-mode", "acceptEdits"}
+			if session.Prompt != "" {
+				args = append(args, session.Prompt)
+			}
+			return program, args, nil
+		default:
+			return "", nil, fmt.Errorf("direct TUI mode is only supported for Codex and Claude Code")
+		}
+	}
 	switch name {
 	case "copilot":
 		if session.Prompt != "" {
@@ -253,6 +292,26 @@ func agentCommand(session Session) (string, []string, error) {
 		}
 	}
 	return program, nil, nil
+}
+
+func tuiResumeCommand(session Session) (string, []string, error) {
+	agent := strings.ToLower(session.Agent)
+	agent = map[string]string{"claude-code": "claude", "codex-cli": "codex"}[agent]
+	if agent == "" {
+		agent = strings.ToLower(session.Agent)
+	}
+	program, err := resolveProgram(agent)
+	if err != nil {
+		return "", nil, err
+	}
+	switch agent {
+	case "codex":
+		return program, []string{"resume", "--last", "--no-alt-screen", "-C", session.WorktreePath}, nil
+	case "claude":
+		return program, []string{"--continue", "--permission-mode", "acceptEdits"}, nil
+	default:
+		return "", nil, fmt.Errorf("direct TUI mode is only supported for Codex and Claude Code")
+	}
 }
 
 func resolveProgram(name string) (string, error) {
