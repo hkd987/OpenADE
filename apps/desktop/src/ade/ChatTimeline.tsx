@@ -93,7 +93,7 @@ function ActivityGroup({ activities, streaming, expanded }: { activities: ChatAc
         {activities.map((activity) => (
           <div className="activity-row" key={activity.id}>
             <span className={`activity-icon ${activity.kind}`}>{activityIcon(activity)}</span>
-            <div><strong>{activity.title}</strong>{activity.detail && <pre>{activity.detail}</pre>}</div>
+            {activity.detail ? <details className="activity-detail"><summary>{activity.title}</summary><pre>{activity.detail}</pre></details> : <strong>{activity.title}</strong>}
           </div>
         ))}
       </div>

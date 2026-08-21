@@ -230,8 +230,9 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .activity-list { margin:5px 0 3px 9px; padding:4px 0 4px 12px; border-left:1px solid var(--line); display:grid; gap:8px; }
 .activity-row { display:grid; grid-template-columns:18px minmax(0,1fr); gap:6px; align-items:start; }
 .activity-icon { width:18px; height:18px; display:grid; place-items:center; color:var(--muted-2); }.activity-icon svg { width:11px; }
-.activity-row strong { display:block; color:var(--muted); font-size:9.5px; font-weight:500; line-height:18px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.activity-row pre { max-height:82px; overflow:auto; margin:3px 0 0; white-space:pre-wrap; color:var(--muted-2); font:8.5px/1.45 "JetBrains Mono",monospace; }
+.activity-row > strong,.activity-detail summary { display:block; color:var(--muted); font-size:9.5px; font-weight:500; line-height:18px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.activity-detail { min-width:0; }.activity-detail summary { list-style:none; cursor:pointer; }.activity-detail summary::-webkit-details-marker { display:none; }.activity-detail summary:hover { color:var(--text); }
+.activity-detail pre { max-height:110px; overflow:auto; margin:4px 0 2px; padding:7px 8px; border:1px solid var(--line-soft); border-radius:6px; background:color-mix(in srgb,var(--surface-2) 74%,transparent); white-space:pre-wrap; color:var(--muted-2); font:8.5px/1.45 "JetBrains Mono",monospace; }
 .markdown-body { color:var(--text); font-size:13px; line-height:1.66; overflow-wrap:anywhere; }
 .markdown-body > :first-child { margin-top:0; }.markdown-body > :last-child { margin-bottom:0; }
 .markdown-body h1,.markdown-body h2,.markdown-body h3,.markdown-body h4 { margin:1.4em 0 .55em; letter-spacing:-.025em; line-height:1.25; font-weight:650; }
