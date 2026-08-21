@@ -32,7 +32,7 @@ import { Preferences } from "./preferences";
 type WorkTab = "review" | "terminal" | "pull-request" | "ticket";
 
 export function SessionWorkspace({ session, preferences, onBack, onRefresh }: { session: Session; preferences: Preferences; onBack: () => void; onRefresh: () => Promise<void> }) {
-  const defaultTab: WorkTab = preferences.session_surface === "terminal" ? "terminal" : "review";
+  const defaultTab: WorkTab = session.agent === "shell" || preferences.session_surface === "terminal" ? "terminal" : "review";
   const [tab, setTab] = useState<WorkTab>(defaultTab);
   const [rightOpen, setRightOpen] = useState(session.agent === "shell" || preferences.session_surface === "terminal");
   const [ticket, setTicket] = useState<Ticket | null>(null);
@@ -119,7 +119,7 @@ export function SessionWorkspace({ session, preferences, onBack, onRefresh }: { 
   };
 
   return (
-    <div className={`session-workspace ${rightOpen ? "with-panel" : ""} ${rightOpen && tab === "review" ? "panel-review" : ""}`}>
+    <div className={`session-workspace ${rightOpen ? "with-panel" : ""} ${rightOpen && tab === "review" ? "panel-review" : ""} ${!chatCapable ? "shell-workspace" : ""}`}>
       <header className="session-header">
         <button className="icon-button" onClick={onBack} aria-label="Back"><ArrowLeft /></button>
         <span className={`status-dot ${session.status}`} />
@@ -164,7 +164,7 @@ export function SessionWorkspace({ session, preferences, onBack, onRefresh }: { 
             <TabButton active={tab === "review"} onClick={() => setTab("review")} icon={<GitDiff />} label="Changes" />
             <TabButton active={tab === "terminal"} onClick={() => setTab("terminal")} icon={<TerminalWindow />} label="Terminal" />
             <TabButton active={tab === "pull-request"} onClick={() => setTab("pull-request")} icon={<GithubLogo />} label="Pull request" />
-            <button className="icon-button" onClick={() => setRightOpen(false)} aria-label="Close work panel"><X /></button>
+            {chatCapable && <button className="icon-button" onClick={() => setRightOpen(false)} aria-label="Close work panel"><X /></button>}
           </div>
           <div className="panel-body">
             {panelError && <div className="inline-error">{panelError}</div>}

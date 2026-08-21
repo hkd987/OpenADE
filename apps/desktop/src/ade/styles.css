@@ -198,6 +198,9 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .session-workspace { height:100vh; display:grid; grid-template-columns:minmax(420px,1fr); grid-template-rows:52px 1fr; position:relative; background:var(--bg); }
 .session-workspace.with-panel { grid-template-columns:minmax(420px,1.08fr) minmax(430px,.92fr); }
 .session-workspace.with-panel.panel-review { grid-template-columns:minmax(340px,.72fr) minmax(590px,1.28fr); }
+.session-workspace.shell-workspace.with-panel { grid-template-columns:minmax(0,1fr); }
+.session-workspace.shell-workspace .conversation { display:none; }
+.session-workspace.shell-workspace .work-panel { grid-column:1; }
 .session-header { grid-column:1/-1; height:52px; border-bottom:1px solid var(--line); display:flex; align-items:center; gap:9px; padding:0 12px; background:color-mix(in srgb,var(--bg) 94%,transparent); }
 .session-title { min-width:0; flex:1; }
 .session-title h1 { margin:0; font-size:13px; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
@@ -208,6 +211,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .session-work-actions { display:flex; align-items:center; gap:3px; margin-left:auto; }
 .session-work-actions button { height:30px; border:0; border-radius:7px; padding:0 9px; display:flex; align-items:center; gap:5px; background:transparent; color:var(--muted); font-size:10px; cursor:pointer; }
 .session-work-actions button:hover,.session-work-actions button.active { background:var(--surface-3); color:var(--text); }.session-work-actions svg { width:13px; }
+.session-workspace.with-panel .session-work-actions { display:none; }
 .session-header .header-stop + .session-work-actions { margin-left:0; }.session-header .panel-toggle { display:none; }
 .conversation { min-width:0; min-height:0; display:grid; grid-template-rows:1fr auto; border-right:1px solid var(--line); background:var(--bg); }
 .messages { overflow:auto; padding:40px max(26px,5vw) 32px; scroll-behavior:smooth; }
