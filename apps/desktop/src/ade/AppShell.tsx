@@ -170,7 +170,7 @@ function Home({ sessions, projects, meta, preferences, onCreated, onOpen, onErro
     setBusy(true);
     onError(null);
     try {
-      const session = await createSession({ title: prompt.trim().split("\n")[0].slice(0, 68), prompt: prompt.trim(), agent, repo_root: repo.trim(), base_branch: base.trim() || "HEAD", ticket_key: ticket.trim(), ticket_url: ticketURL.trim() });
+      const session = await createSession({ title: prompt.trim().split("\n")[0].slice(0, 68), prompt: prompt.trim(), agent, mode: preferences.session_surface === "terminal" && ["codex", "claude"].includes(agent) ? "tui" : "chat", repo_root: repo.trim(), base_branch: base.trim() || "HEAD", ticket_key: ticket.trim(), ticket_url: ticketURL.trim() });
       sessionStorage.removeItem("openade-template");
       onCreated(session);
     } catch (reason) {

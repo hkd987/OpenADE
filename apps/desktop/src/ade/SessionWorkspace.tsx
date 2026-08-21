@@ -26,7 +26,7 @@ import {
 } from "./api";
 import { ChatTimeline } from "./ChatTimeline";
 import { ReviewWorkspace } from "./ReviewWorkspace";
-import { TerminalWorkspace } from "./Terminal";
+import { DirectTUIWorkspace, TerminalWorkspace } from "./Terminal";
 import { Preferences } from "./preferences";
 
 type WorkTab = "review" | "terminal" | "pull-request" | "ticket";
@@ -42,9 +42,10 @@ export function SessionWorkspace({ session, preferences, onBack, onRefresh }: { 
   const [busy, setBusy] = useState(false);
   const [streamVersion, setStreamVersion] = useState(0);
   const outputRef = useRef<HTMLDivElement>(null);
+  const tuiMode = session.mode === "tui";
   const active = ["running", "starting", "waiting"].includes(session.status);
   const resumable = ["claude", "claude-code", "codex", "codex-cli"].includes(session.agent) && !active;
-  const chatCapable = session.agent !== "shell";
+  const chatCapable = session.agent !== "shell" && !tuiMode;
   const canMessage = chatCapable && (active || resumable);
 
   useEffect(() => {
@@ -55,6 +56,7 @@ export function SessionWorkspace({ session, preferences, onBack, onRefresh }: { 
   }, [defaultTab, preferences.session_surface, session.agent, session.id]);
 
   useEffect(() => {
+    if (tuiMode) return;
     setOutput("");
     const socket = new WebSocket(streamURL(session.id));
     socket.onmessage = (event) => {
@@ -64,7 +66,7 @@ export function SessionWorkspace({ session, preferences, onBack, onRefresh }: { 
       }
     };
     return () => socket.close();
-  }, [session.id, streamVersion]);
+  }, [session.id, streamVersion, tuiMode]);
 
   useEffect(() => {
     outputRef.current?.scrollTo({ top: outputRef.current.scrollHeight, behavior: "smooth" });
@@ -134,7 +136,8 @@ export function SessionWorkspace({ session, preferences, onBack, onRefresh }: { 
         <button className="icon-button panel-toggle" onClick={() => setRightOpen((value) => !value)} aria-label={rightOpen ? "Close work panel" : "Open work panel"}><SidebarSimple /></button>
         <button className="icon-button" aria-label="Session actions"><DotsThree /></button>
       </header>
-      <section className="conversation">
+      <section className={`conversation ${tuiMode ? "tui-conversation" : ""}`}>
+        {tuiMode ? <DirectTUIWorkspace session={session} onRefresh={onRefresh} /> : <>
         <div className="messages" ref={outputRef}>
           {chatCapable ? <ChatTimeline session={session} output={output} activityExpanded={preferences.activity_detail === "expanded"} /> : <div className="shell-session-note"><TerminalWindow /><div><strong>Terminal run</strong><p>This run stays in the terminal so command output never gets mixed into chat.</p></div></div>}
         </div>
@@ -156,7 +159,7 @@ export function SessionWorkspace({ session, preferences, onBack, onRefresh }: { 
             <span className="runtime-chip"><span className={`status-dot ${session.status}`} />{active ? `${agentLabel(session.agent)} is attached` : resumable ? "Conversation can continue" : `Run ${session.status}`}</span>
             <button className="send-button" disabled={!canMessage || !input.trim()} aria-label="Send message"><ArrowUp weight="bold" /></button>
           </div>
-        </form> : <div className="session-closed-state"><span className={`status-dot ${session.status}`} />{chatCapable ? `This ${agentLabel(session.agent)} run is ${session.status}` : "Use the Terminal panel to inspect this run"}</div>}
+        </form> : <div className="session-closed-state"><span className={`status-dot ${session.status}`} />{chatCapable ? `This ${agentLabel(session.agent)} run is ${session.status}` : "Use the Terminal panel to inspect this run"}</div>}</>}
       </section>
       {rightOpen && (
         <aside className="work-panel">
@@ -168,7 +171,7 @@ export function SessionWorkspace({ session, preferences, onBack, onRefresh }: { 
           </div>
           <div className="panel-body">
             {panelError && <div className="inline-error">{panelError}</div>}
-            {tab === "terminal" ? <TerminalWorkspace sessionId={session.id} /> : tab === "review" ? <ReviewWorkspace sessionId={session.id} /> : tab === "ticket" ? <TicketPanel ticket={ticket} session={session} /> : <PRPanel session={session} busy={busy} onCreate={createPR} onTicket={() => setTab("ticket")} />}
+            {tab === "terminal" ? <TerminalWorkspace session={session} /> : tab === "review" ? <ReviewWorkspace sessionId={session.id} /> : tab === "ticket" ? <TicketPanel ticket={ticket} session={session} /> : <PRPanel session={session} busy={busy} onCreate={createPR} onTicket={() => setTab("ticket")} />}
           </div>
         </aside>
       )}

@@ -14,6 +14,7 @@ export interface Session {
   title: string;
   prompt: string;
   agent: string;
+  mode: "chat" | "tui";
   repo_root: string;
   worktree_path: string;
   branch: string;
@@ -82,6 +83,7 @@ export interface CreateSessionInput {
   title: string;
   prompt: string;
   agent: string;
+  mode?: "chat" | "tui";
   repo_root: string;
   base_branch: string;
   ticket_key?: string;
@@ -145,6 +147,9 @@ export const sendMessage = (id: string, text: string) =>
     body: JSON.stringify({ text }),
   });
 
+export const resumeTUI = (id: string) =>
+  request<Session>(`/api/sessions/${id}/resume-tui`, { method: "POST" });
+
 export const resizeTerminal = (id: string, rows: number, cols: number) =>
   request<void>(`/api/sessions/${id}/resize`, {
     method: "POST",
@@ -161,10 +166,10 @@ export async function listTerminals(sessionId: string): Promise<ProjectTerminal[
   return payload.terminals ?? [];
 }
 
-export const createTerminal = (sessionId: string, title?: string) =>
+export const createTerminal = (sessionId: string, options?: { title?: string; kind?: "shell" | "agent"; agent?: string; resume?: boolean }) =>
   request<ProjectTerminal>(`/api/sessions/${sessionId}/terminals`, {
     method: "POST",
-    body: JSON.stringify({ title: title ?? "" }),
+    body: JSON.stringify({ title: options?.title ?? "", kind: options?.kind ?? "shell", agent: options?.agent ?? "", resume: options?.resume ?? false }),
   });
 
 export const sendTerminalInput = (id: string, data: string) =>

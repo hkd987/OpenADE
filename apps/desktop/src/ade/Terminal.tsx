@@ -1,4 +1,4 @@
-import { Plus, TerminalWindow, X } from "@phosphor-icons/react";
+import { Cpu, Play, Plus, TerminalWindow, X } from "@phosphor-icons/react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
@@ -7,12 +7,18 @@ import {
   listTerminals,
   ProjectTerminal,
   resizeProjectTerminal,
+  resizeTerminal,
+  resumeTUI,
+  sendInput,
   sendTerminalInput,
+  Session,
   stopTerminal,
+  streamURL,
   terminalStreamURL,
 } from "./api";
 
-export function TerminalWorkspace({ sessionId }: { sessionId: string }) {
+export function TerminalWorkspace({ session }: { session: Session }) {
+  const sessionId = session.id;
   const [terminals, setTerminals] = useState<ProjectTerminal[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [hidden, setHidden] = useState<Set<string>>(new Set());
@@ -35,6 +41,20 @@ export function TerminalWorkspace({ sessionId }: { sessionId: string }) {
     setError(null);
     try {
       const terminal = await createTerminal(sessionId);
+      setTerminals((current) => [...current, terminal]);
+      setActiveId(terminal.id);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const openAgentTUI = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const terminal = await createTerminal(sessionId, { kind: "agent", agent: session.agent, resume: true });
       setTerminals((current) => [...current, terminal]);
       setActiveId(terminal.id);
     } catch (reason) {
@@ -76,6 +96,7 @@ export function TerminalWorkspace({ sessionId }: { sessionId: string }) {
           </button>
         ))}
         <button className="terminal-new" type="button" onClick={() => void openTerminal()} disabled={busy} aria-label="New terminal"><Plus /></button>
+        {["codex", "codex-cli", "claude", "claude-code"].includes(session.agent) && <button className="terminal-new agent-tui-new" type="button" onClick={() => void openAgentTUI()} disabled={busy} aria-label={`Open ${session.agent} TUI`}><Cpu /></button>}
       </header>
       {error && <div className="inline-error">{error}</div>}
       {active ? <TerminalHost key={active.id} terminal={active} /> : (
@@ -83,11 +104,34 @@ export function TerminalWorkspace({ sessionId }: { sessionId: string }) {
           <span><TerminalWindow /></span>
           <strong>Project terminal</strong>
           <p>Open an independent shell in this session’s isolated worktree.</p>
-          <button type="button" onClick={() => void openTerminal()} disabled={busy}><Plus /> New terminal</button>
+          <div className="terminal-empty-actions"><button type="button" onClick={() => void openTerminal()} disabled={busy}><Plus /> New terminal</button>{["codex", "codex-cli", "claude", "claude-code"].includes(session.agent) && <button type="button" className="primary" onClick={() => void openAgentTUI()} disabled={busy}><Cpu /> Open {agentName(session.agent)} TUI</button>}</div>
         </div>
       )}
     </section>
   );
+}
+
+export function DirectTUIWorkspace({ session, onRefresh }: { session: Session; onRefresh: () => Promise<void> }) {
+  const active = ["starting", "running", "waiting"].includes(session.status);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const resume = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await resumeTUI(session.id);
+      await onRefresh();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return <section className="direct-tui-workspace">
+    <header><span><Cpu /> Direct {agentName(session.agent)} TUI</span><small>Daemon-hosted · {session.worktree_path}</small>{!active && <button type="button" onClick={() => void resume()} disabled={busy}><Play weight="fill" /> Resume</button>}</header>
+    {error && <div className="inline-error">{error}</div>}
+    <SessionTerminalHost session={session} />
+  </section>;
 }
 
 function TerminalHost({ terminal: projectTerminal }: { terminal: ProjectTerminal }) {
@@ -145,4 +189,44 @@ function TerminalHost({ terminal: projectTerminal }: { terminal: ProjectTerminal
   }, [projectTerminal.id, projectTerminal.status]);
 
   return <div className="terminal-host" ref={hostRef} aria-label={`${projectTerminal.title} in project worktree`} />;
+}
+
+function SessionTerminalHost({ session }: { session: Session }) {
+  const active = ["starting", "running", "waiting"].includes(session.status);
+  const input = useCallback((data: string) => sendInput(session.id, data), [session.id]);
+  const resize = useCallback((rows: number, cols: number) => resizeTerminal(session.id, rows, cols), [session.id]);
+  return <TerminalSurface
+    id={session.id}
+    title={`${agentName(session.agent)} TUI`}
+    running={active}
+    socketURL={streamURL(session.id)}
+    onInput={input}
+    onResize={resize}
+  />;
+}
+
+function TerminalSurface({ id, title, running, socketURL, onInput, onResize }: { id: string; title: string; running: boolean; socketURL: string; onInput: (data: string) => Promise<void>; onResize: (rows: number, cols: number) => Promise<void> }) {
+  const hostRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const host = hostRef.current;
+    if (!host) return;
+    const terminal = new Terminal({
+      cursorBlink: running, cursorStyle: "bar", disableStdin: !running,
+      fontFamily: '"SFMono-Regular", "JetBrains Mono", Menlo, monospace', fontSize: 12.5, lineHeight: 1.35, scrollback: 10_000,
+      theme: { background: "#111315", foreground: "#d9dddf", cursor: "#f2f4f5", selectionBackground: "#38566f88", black: "#111315", red: "#f06a6a", green: "#75d196", yellow: "#e3b764", blue: "#69aee8", magenta: "#c59bea", cyan: "#76c7c2", white: "#e9ecee", brightBlack: "#687078" },
+    });
+    const fit = new FitAddon(); terminal.loadAddon(fit); terminal.open(host);
+    let disposed = false;
+    const socket = new WebSocket(socketURL);
+    socket.onmessage = (event) => { const message = JSON.parse(String(event.data)) as { type: string; data?: string }; if (message.type === "output" && message.data) terminal.write(message.data); };
+    const fitAndResize = () => { if (disposed || host.clientWidth === 0 || host.clientHeight === 0) return; fit.fit(); if (running) void onResize(terminal.rows, terminal.cols).catch(() => undefined); };
+    const observer = new ResizeObserver(fitAndResize); observer.observe(host); requestAnimationFrame(fitAndResize);
+    const input = terminal.onData((data) => { void onInput(data).catch(() => undefined); });
+    return () => { disposed = true; observer.disconnect(); input.dispose(); socket.close(); terminal.dispose(); };
+  }, [id, onInput, onResize, running, socketURL]);
+  return <div className="terminal-host direct-tui-host" ref={hostRef} aria-label={`${title} in project worktree`} />;
+}
+
+function agentName(agent: string): string {
+  return agent.includes("claude") ? "Claude Code" : "Codex";
 }
