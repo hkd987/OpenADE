@@ -8,13 +8,14 @@ import {
   Robot,
   SidebarSimple,
   SlidersHorizontal,
+  SquaresFour,
   SpinnerGap,
   TerminalWindow,
 } from "@phosphor-icons/react";
 import { ReactNode, useEffect, useMemo, useState } from "react";
 import { ExternalConversation, projectName, relativeTime, Session } from "./api";
 
-export type Page = "home" | "sessions" | "agents" | "review" | "settings";
+export type Page = "home" | "sites" | "sessions" | "agents" | "review" | "settings";
 
 export function Sidebar({
   page,
@@ -85,6 +86,7 @@ export function Sidebar({
       <div className="workspace-switcher"><div className="workspace-mark">O</div><span>OpenADE</span><button className="icon-button workspace-action" onClick={onNewSession} aria-label="New session" title="New session"><Plus /></button><button className="icon-button workspace-action" onClick={onToggle} aria-label="Collapse sidebar" title="Collapse sidebar"><SidebarSimple /></button></div>
       <nav className="primary-nav" aria-label="Primary">
         <NavButton icon={<House />} label="Home" active={page === "home"} onClick={() => onPage("home")} />
+        <NavButton icon={<SquaresFour />} label="Sites" active={page === "sites"} onClick={() => onPage("sites")} />
         <NavButton icon={<ListMagnifyingGlass />} label="Sessions" active={page === "sessions"} onClick={() => onPage("sessions")} />
         <NavButton icon={<Robot />} label="Workflows" active={page === "agents"} onClick={() => onPage("agents")} />
         <NavButton icon={<GitBranch />} label="Review" active={page === "review"} onClick={() => onPage("review")} />

@@ -39,6 +39,7 @@ import { SessionWorkspace } from "./SessionWorkspace";
 import { loadPreferences, Preferences, savePreferences, themeClass } from "./preferences";
 import { SettingsPage } from "./SettingsPage";
 import { Page, Sidebar } from "./Sidebar";
+import { SitesPage } from "./SitesPage";
 
 const agents = [
   { id: "claude", label: "Claude Code" },
@@ -174,6 +175,8 @@ function AppShell() {
           <SessionWorkspace session={selected} preferences={preferences} onBack={() => setSelectedId(null)} onRefresh={refresh} />
         ) : page === "home" ? (
           <Home sessions={sessions} projects={visibleProjects} meta={meta} preferences={preferences} onCreated={(session) => { void refresh(); openSession(session.id); }} onOpen={openSession} onError={setError} />
+        ) : page === "sites" ? (
+          <SitesPage />
         ) : page === "sessions" ? (
           <SessionsPage sessions={sessions} onOpen={openSession} />
         ) : page === "agents" ? (

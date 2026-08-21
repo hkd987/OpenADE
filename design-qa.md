@@ -49,3 +49,46 @@
 ## Final result
 
 passed
+
+---
+
+# Sites empty-state extension QA
+
+## Evidence
+
+- Source visual truth: `/var/folders/2h/k_vpn3_n7kl2knmtx_w78s940000gn/T/codex-clipboard-5c7371e4-4fb5-4d89-9c38-7e29f1c485c7.png` (2,559 × 1,038 px ChatGPT Sites empty state).
+- Rendered implementation: `../outputs/openade-sites-empty.png` (1,194 × 768 px Wails window, Glass theme).
+- Full-view comparison: `../outputs/openade-sites-full-comparison.png`.
+- Focused comparison: `../outputs/openade-sites-focused-comparison.png`; the 1,307 × 1,038 source content crop was normalized to the implementation main-content crop at 968 × 768 px. The source came from a wider, higher-density desktop capture, so this normalized comparison is used for content alignment rather than raw full-window pixel equivalence.
+- State: Sites selected in primary navigation, empty collection, idle search field, Create and refresh affordances visible.
+
+## Findings
+
+- P0: none.
+- P1: none.
+- P2: none after correction.
+- P3: OpenADE keeps the active Glass palette and its existing 280 px project sidebar instead of copying the source application's warm Dusk palette and narrower navigation. This is intentional theme and product-shell continuity.
+
+## Required fidelity surfaces
+
+- Fonts and typography: Inter, sentence case, compact 25 px page title, 12 px subtitle, and restrained empty-state hierarchy match the reference while using OpenADE's established type tokens.
+- Spacing and layout rhythm: centered 700 px header/search column, pill search field, top-right actions, and the empty-state group align with the normalized source crop. Persistent controls remain visible at 1,194 × 768.
+- Colors and tokens: the same surface, line, text, muted, accent, and Glass blur tokens used elsewhere in OpenADE are applied; no page-specific palette was introduced.
+- Image quality and assets: the source contains no raster imagery. All visible icons use the existing Phosphor library; no placeholder art, handcrafted SVG, or CSS drawing was introduced.
+- Copy and content: “Sites,” “Turn your ideas into live websites,” “Search sites,” “No sites yet,” and both Create labels reproduce the reference interaction vocabulary.
+
+## Comparison history
+
+1. Initial implementation matched navigation, header, search, actions, icon, copy, and empty CTA, but the empty-state group sat roughly 75 px below the normalized source position and the refresh icon had an unnecessary bordered container (P2).
+2. Final correction moved the empty-state anchor from 48% to 39% and removed the refresh border. The revised focused comparison shows aligned header/search and empty-state composition with no actionable P0/P1/P2 mismatch.
+
+## Interactions tested
+
+- Opened Sites from the primary sidebar and verified selected navigation state.
+- Typed into the local presentation-only search field through automated component coverage.
+- Verified both Create hooks and the refresh hook are exposed as UI affordances without backend behavior.
+- Checked the macOS accessibility tree for page title, search field, empty-state label, refresh, and both Create actions.
+
+## Final result
+
+passed

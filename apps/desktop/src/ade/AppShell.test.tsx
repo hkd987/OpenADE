@@ -65,6 +65,18 @@ describe("Tembo-inspired application shell", () => {
     expect(screen.getByText("Fix failing CI")).toBeInTheDocument();
   });
 
+  it("opens the presentation-only Sites surface from primary navigation", async () => {
+    const user = userEvent.setup();
+    render(<AppShell />);
+    await user.click(screen.getByRole("button", { name: "Sites" }));
+    expect(screen.getByRole("heading", { name: "Sites" })).toBeInTheDocument();
+    const search = screen.getByPlaceholderText("Search sites");
+    await user.type(search, "portfolio");
+    expect(search).toHaveValue("portfolio");
+    expect(screen.getByRole("heading", { name: "No sites yet" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Create new site" })).toBeInTheDocument();
+  });
+
   it("persists a desktop theme from settings", async () => {
     const user = userEvent.setup();
     const { container } = render(<AppShell />);
