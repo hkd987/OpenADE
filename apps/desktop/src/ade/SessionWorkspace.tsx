@@ -1,0 +1,164 @@
+import {
+  ArrowLeft,
+  ArrowUp,
+  DotsThree,
+  GitBranch,
+  GitDiff,
+  GithubLogo,
+  SidebarSimple,
+  SpinnerGap,
+  Square,
+  TerminalWindow,
+  Ticket as TicketIcon,
+  X,
+} from "@phosphor-icons/react";
+import { FormEvent, ReactNode, useEffect, useRef, useState } from "react";
+import {
+  createPullRequest,
+  getTicket,
+  projectName,
+  sendInput,
+  Session,
+  stopSession,
+  streamURL,
+  Ticket,
+} from "./api";
+import { ChatTimeline } from "./ChatTimeline";
+import { ReviewWorkspace } from "./ReviewWorkspace";
+import { TerminalWorkspace } from "./Terminal";
+
+type WorkTab = "review" | "terminal" | "pull-request" | "ticket";
+
+export function SessionWorkspace({ session, onBack, onRefresh }: { session: Session; onBack: () => void; onRefresh: () => Promise<void> }) {
+  const [tab, setTab] = useState<WorkTab>("review");
+  const [rightOpen, setRightOpen] = useState(true);
+  const [ticket, setTicket] = useState<Ticket | null>(null);
+  const [panelError, setPanelError] = useState<string | null>(null);
+  const [input, setInput] = useState("");
+  const [output, setOutput] = useState("");
+  const [busy, setBusy] = useState(false);
+  const outputRef = useRef<HTMLDivElement>(null);
+  const active = ["running", "starting", "waiting"].includes(session.status);
+
+  useEffect(() => {
+    setOutput("");
+    const socket = new WebSocket(streamURL(session.id));
+    socket.onmessage = (event) => {
+      const message = JSON.parse(String(event.data)) as { type: string; data?: string };
+      if (message.type === "output" && message.data) {
+        setOutput((current) => (current + message.data!).slice(-2_000_000));
+      }
+    };
+    return () => socket.close();
+  }, [session.id]);
+
+  useEffect(() => {
+    outputRef.current?.scrollTo({ top: outputRef.current.scrollHeight, behavior: "smooth" });
+  }, [output]);
+
+  useEffect(() => {
+    if (tab === "ticket" && session.ticket_key && !ticket) {
+      void getTicket(session.ticket_key).then(setTicket).catch((reason) => setPanelError(String(reason)));
+    }
+  }, [session.ticket_key, tab, ticket]);
+
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!input.trim() || !active) return;
+    const value = input.trim();
+    setInput("");
+    try {
+      await sendInput(session.id, value + "\n");
+    } catch (reason) {
+      setPanelError(reason instanceof Error ? reason.message : String(reason));
+    }
+  };
+
+  const createPR = async () => {
+    setBusy(true);
+    setPanelError(null);
+    try {
+      await createPullRequest({
+        sessionId: session.id,
+        title: session.title,
+        base: session.base_branch,
+        body: `## Summary\n\n${session.prompt}\n\n${session.ticket_key ? `Ticket: ${session.ticket_key}` : ""}\n\nCreated from OpenADE.`,
+      });
+      await onRefresh();
+    } catch (reason) {
+      setPanelError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className={`session-workspace ${rightOpen ? "with-panel" : ""}`}>
+      <header className="session-header">
+        <button className="icon-button" onClick={onBack} aria-label="Back"><ArrowLeft /></button>
+        <span className={`status-dot ${session.status}`} />
+        <div className="session-title"><h1>{session.title}</h1><p>{projectName(session.repo_root)} · <code>{session.branch}</code></p></div>
+        <StatusPill status={session.status} />
+        {active && <button className="header-stop" onClick={() => void stopSession(session.id).then(onRefresh)}><Square weight="fill" /> Stop</button>}
+        <button className="icon-button" onClick={() => setRightOpen((value) => !value)} aria-label="Toggle work panel"><SidebarSimple /></button>
+        <button className="icon-button" aria-label="Session actions"><DotsThree /></button>
+      </header>
+      <section className="conversation">
+        <div className="messages" ref={outputRef}><ChatTimeline session={session} output={output} /></div>
+        <form className="session-composer" onSubmit={submit}>
+          <textarea
+            value={input}
+            onChange={(event) => setInput(event.target.value)}
+            placeholder={active ? `Message ${agentLabel(session.agent)}…` : "This run is complete"}
+            rows={2}
+            disabled={!active}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && !event.shiftKey) {
+                event.preventDefault();
+                event.currentTarget.form?.requestSubmit();
+              }
+            }}
+          />
+          <div>
+            <span className="runtime-chip"><span className={`status-dot ${session.status}`} />{active ? `${agentLabel(session.agent)} is attached` : `Run ${session.status}`}</span>
+            <button className="send-button" disabled={!active || !input.trim()} aria-label="Send message"><ArrowUp weight="bold" /></button>
+          </div>
+        </form>
+      </section>
+      {rightOpen && (
+        <aside className="work-panel">
+          <div className="work-tabs">
+            <TabButton active={tab === "review"} onClick={() => setTab("review")} icon={<GitDiff />} label="Changes" />
+            <TabButton active={tab === "terminal"} onClick={() => setTab("terminal")} icon={<TerminalWindow />} label="Terminal" />
+            <TabButton active={tab === "pull-request"} onClick={() => setTab("pull-request")} icon={<GithubLogo />} label="Pull request" />
+            <button className="icon-button" onClick={() => setRightOpen(false)} aria-label="Close work panel"><X /></button>
+          </div>
+          <div className="panel-body">
+            {panelError && <div className="inline-error">{panelError}</div>}
+            {tab === "terminal" ? <TerminalWorkspace sessionId={session.id} /> : tab === "review" ? <ReviewWorkspace sessionId={session.id} /> : tab === "ticket" ? <TicketPanel ticket={ticket} session={session} /> : <PRPanel session={session} busy={busy} onCreate={createPR} onTicket={() => setTab("ticket")} />}
+          </div>
+        </aside>
+      )}
+    </div>
+  );
+}
+
+function TabButton({ active, icon, label, onClick }: { active: boolean; icon: ReactNode; label: string; onClick: () => void }) {
+  return <button className={active ? "active" : ""} onClick={onClick}>{icon}{label}</button>;
+}
+
+function PRPanel({ session, busy, onCreate, onTicket }: { session: Session; busy: boolean; onCreate: () => void; onTicket: () => void }) {
+  return <div className="pr-panel"><div className="panel-kicker"><GithubLogo /> GitHub delivery</div><h2>{session.pr_url ? "Draft pull request created" : "Prepare this branch for review"}</h2><p>OpenADE keeps the ticket key, branch, commit policy, and draft PR connected to this session.</p><dl><div><dt>Head</dt><dd><code>{session.branch}</code></dd></div><div><dt>Base</dt><dd><code>{session.base_branch}</code></dd></div>{session.ticket_key && <div><dt>Ticket</dt><dd><button className="link-button" onClick={onTicket}>{session.ticket_key}</button></dd></div>}</dl>{session.pr_url ? <button className="primary-wide" onClick={() => window.open(session.pr_url, "_blank")}><GithubLogo /> Open pull request</button> : <button className="primary-wide" disabled={busy} onClick={onCreate}>{busy ? <SpinnerGap className="spin" /> : <GitBranch />} Push branch and create draft PR</button>}<small>This action uses your locally authenticated GitHub CLI.</small></div>;
+}
+
+function TicketPanel({ ticket, session }: { ticket: Ticket | null; session: Session }) {
+  return <div className="ticket-panel"><div className="panel-kicker"><TicketIcon /> Linked work item</div><h2>{ticket?.summary || session.ticket_key}</h2><p>{ticket ? `${ticket.status || "Status unavailable"} · ${ticket.assignee || "Unassigned"}` : "Ticket details are linked to this session. Configure the Jira CLI to load live metadata."}</p>{session.ticket_url && <button className="primary-wide" onClick={() => window.open(session.ticket_url, "_blank")}><TicketIcon /> Open in Jira</button>}<dl><div><dt>Required branch prefix</dt><dd><code>{session.ticket_key?.toLowerCase()}/</code></dd></div><div><dt>Current branch</dt><dd><code>{session.branch}</code></dd></div></dl></div>;
+}
+
+function StatusPill({ status }: { status: string }) {
+  return <span className={`status-pill ${status}`}><span className="status-dot" />{status.replace("-", " ")}</span>;
+}
+
+function agentLabel(agent: string): string {
+  return ({ claude: "Claude Code", codex: "Codex CLI", copilot: "Copilot", opencode: "OpenCode" } as Record<string, string>)[agent] ?? agent;
+}

@@ -1,6 +1,5 @@
 import {
   Pulse,
-  ArrowLeft,
   ArrowUp,
   CaretDown,
   Check,
@@ -21,20 +20,15 @@ import {
   Robot,
   SidebarSimple,
   SpinnerGap,
-  Square,
   Sun,
   TerminalWindow,
   Ticket as TicketIcon,
   X,
 } from "@phosphor-icons/react";
-import { FormEvent, ReactNode, useCallback, useEffect, useRef, useState } from "react";
+import { FormEvent, ReactNode, useCallback, useEffect, useState } from "react";
 import {
-  createPullRequest,
   createSession,
-  getDiff,
-  getFiles,
   getMeta,
-  getTicket,
   listProjects,
   listPullRequests,
   listSessions,
@@ -42,17 +36,11 @@ import {
   projectName,
   PullRequest,
   relativeTime,
-  sendInput,
   Session,
-  stopSession,
-  streamURL,
-  Ticket,
 } from "./api";
-import { TerminalPanel } from "./Terminal";
-import { formatAgentStream } from "./stream";
+import { SessionWorkspace } from "./SessionWorkspace";
 
 type Page = "home" | "sessions" | "agents" | "review";
-type WorkTab = "changes" | "files" | "terminal" | "pull-request" | "ticket";
 
 const agents = [
   { id: "claude", label: "Claude Code" },
@@ -294,78 +282,9 @@ function ReviewPage({ projects, sessions }: { projects: string[]; sessions: Sess
   return <div className="review-page"><div className="review-top"><PageHeader eyebrow="GitHub" title="Pull request review" subtitle="Local branches and repository checks in one queue" /><label className="repo-picker"><GithubLogo /><select value={repo} onChange={(event) => setRepo(event.target.value)}>{projects.map((project) => <option key={project} value={project}>{projectName(project)}</option>)}</select></label></div><div className="review-metrics"><Metric label="Open pull requests" value={prs.length} tone="green" /><Metric label="Needs your review" value={needsReview} tone="orange" /><Metric label="Draft" value={draft} tone="neutral" /></div><div className="list-toolbar"><label className="search-box"><ListMagnifyingGlass /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search pull requests" /></label><button className="secondary-button"><Columns /> View</button></div>{loading ? <div className="loading-state"><SpinnerGap className="spin" /> Loading pull requests…</div> : error ? <div className="inline-error">{error}</div> : <div className="pr-list">{filtered.map((pr) => { const linked = sessions.find((session) => session.branch === pr.headRefName); return <button key={pr.number} className="pr-row" onClick={() => window.open(pr.url, "_blank")}><span className="pr-number">#{pr.number}</span><span className="pr-main"><strong>{pr.title}</strong><small>{pr.headRefName} → {pr.baseRefName} · @{pr.author.login}</small></span>{linked?.ticket_key && <span className="ticket-chip"><TicketIcon />{linked.ticket_key}</span>}<StatusPill status={pr.isDraft ? "interrupted" : "running"} label={pr.isDraft ? "Draft" : "Open"} /></button>; })}{filtered.length === 0 && <div className="table-empty">No open pull requests found for this repository.</div>}</div>}</div>;
 }
 
-function SessionWorkspace({ session, onBack, onRefresh }: { session: Session; onBack: () => void; onRefresh: () => Promise<void> }) {
-  const [tab, setTab] = useState<WorkTab>("terminal");
-  const [rightOpen, setRightOpen] = useState(true);
-  const [diff, setDiff] = useState("");
-  const [files, setFiles] = useState<string[]>([]);
-  const [ticket, setTicket] = useState<Ticket | null>(null);
-  const [panelError, setPanelError] = useState<string | null>(null);
-  const [input, setInput] = useState("");
-  const [output, setOutput] = useState("");
-  const [busy, setBusy] = useState(false);
-  const outputRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    setOutput("");
-    const socket = new WebSocket(streamURL(session.id));
-    socket.onmessage = (event) => {
-      const message = JSON.parse(String(event.data)) as { type: string; data?: string };
-      if (message.type === "output" && message.data) {
-        setOutput((current) => (current + message.data!).slice(-240_000));
-      }
-    };
-    return () => socket.close();
-  }, [session.id]);
-
-  useEffect(() => { outputRef.current?.scrollTo({ top: outputRef.current.scrollHeight, behavior: "smooth" }); }, [output]);
-  useEffect(() => {
-    setPanelError(null);
-    if (tab === "changes") void getDiff(session.id).then(setDiff).catch((reason) => setPanelError(String(reason)));
-    if (tab === "files") void getFiles(session.id).then(setFiles).catch((reason) => setPanelError(String(reason)));
-    if (tab === "ticket" && session.ticket_key) void getTicket(session.ticket_key).then(setTicket).catch((reason) => setPanelError(String(reason)));
-  }, [tab, session.id, session.ticket_key]);
-
-  const submit = async (event: FormEvent) => {
-    event.preventDefault();
-    if (!input.trim()) return;
-    const value = input;
-    setInput("");
-    try { await sendInput(session.id, value + "\r"); } catch (reason) { setPanelError(String(reason)); }
-  };
-
-  const createPR = async () => {
-    setBusy(true); setPanelError(null);
-    try {
-      await createPullRequest({ sessionId: session.id, title: session.title, base: session.base_branch, body: `## Summary\n\n${session.prompt}\n\n${session.ticket_key ? `Ticket: ${session.ticket_key}` : ""}\n\nCreated from OpenADE.` });
-      await onRefresh();
-    } catch (reason) { setPanelError(reason instanceof Error ? reason.message : String(reason)); } finally { setBusy(false); }
-  };
-
-  return <div className={`session-workspace ${rightOpen ? "with-panel" : ""}`}>
-    <header className="session-header"><button className="icon-button" onClick={onBack}><ArrowLeft /></button><span className={`status-dot ${session.status}`} /><div className="session-title"><h1>{session.title}</h1><p>{projectName(session.repo_root)} · <code>{session.branch}</code></p></div><StatusPill status={session.status} /><button className="icon-button" onClick={() => setRightOpen((value) => !value)}><SidebarSimple /></button><button className="icon-button"><DotsThree /></button></header>
-    <section className="conversation"><div className="messages" ref={outputRef}><div className="user-message"><p>{session.prompt}</p><small>You · {relativeTime(session.created_at)}</small></div><div className="assistant-message"><div className="assistant-head"><span className="agent-avatar"><Cpu weight="fill" /></span><strong>{agents.find((item) => item.id === session.agent)?.label ?? session.agent}</strong>{["running", "starting"].includes(session.status) && <span className="working"><SpinnerGap className="spin" /> Working</span>}</div>{output ? <pre>{formatAgentStream(output) || cleanTranscript(output)}</pre> : <div className="thinking-placeholder"><span /><span /><span /> Preparing the worktree and agent context…</div>}<details className="intent-log"><summary><Lightning /> Intent and runtime</summary><div className="intent-steps"><span className="done"><Check /> Worktree created</span><span className="done"><Check /> Agent attached</span><span className={session.pr_url ? "done" : ""}>{session.pr_url ? <Check /> : <span className="step-dot" />} Draft PR</span></div><code>{session.worktree_path}</code></details></div></div>
-      <form className="session-composer" onSubmit={submit}><textarea value={input} onChange={(event) => setInput(event.target.value)} placeholder="Reply to the agent or type a terminal command…" rows={2} /><div><button type="button" className="round-action"><Plus /></button><span className="runtime-chip"><TerminalWindow /> PTY · {session.pid ? `PID ${session.pid}` : session.status}</span><button className="send-button" disabled={!input.trim()}><ArrowUp weight="bold" /></button></div></form>
-    </section>
-    {rightOpen && <aside className="work-panel"><div className="work-tabs"><TabButton active={tab === "changes"} onClick={() => setTab("changes")} icon={<GitDiff />} label="Changes" /><TabButton active={tab === "files"} onClick={() => setTab("files")} icon={<FileCode />} label="Files" /><TabButton active={tab === "terminal"} onClick={() => setTab("terminal")} icon={<TerminalWindow />} label="Terminal" /><TabButton active={tab === "pull-request"} onClick={() => setTab("pull-request")} icon={<GithubLogo />} label="PR" /><button className="icon-button" onClick={() => setRightOpen(false)}><X /></button></div><div className="panel-body">{panelError && <div className="inline-error">{panelError}</div>}{tab === "terminal" ? <TerminalPanel session={session} /> : tab === "changes" ? <CodePanel content={diff} empty="No uncommitted changes yet." /> : tab === "files" ? <FileList files={files} /> : tab === "ticket" ? <TicketPanel ticket={ticket} session={session} /> : <PRPanel session={session} busy={busy} onCreate={createPR} onTicket={() => setTab("ticket")} />}</div></aside>}
-    <button className="stop-session" onClick={() => void stopSession(session.id).then(onRefresh)} disabled={!(["running", "starting", "waiting"].includes(session.status))}><Square weight="fill" /> Stop</button>
-  </div>;
-}
-
-function TabButton({ active, icon, label, onClick }: { active: boolean; icon: ReactNode; label: string; onClick: () => void }) { return <button className={active ? "active" : ""} onClick={onClick}>{icon}{label}</button>; }
-function CodePanel({ content, empty }: { content: string; empty: string }) { return content ? <pre className="code-panel">{content}</pre> : <div className="panel-empty"><GitDiff /><strong>{empty}</strong><p>Changes made by the agent will appear here without leaving the session.</p></div>; }
-function FileList({ files }: { files: string[] }) { return <div className="file-list">{files.map((file) => <div key={file}><FileCode /><span>{file}</span></div>)}{files.length === 0 && <div className="panel-empty"><FileCode /><strong>No files indexed</strong></div>}</div>; }
-function PRPanel({ session, busy, onCreate, onTicket }: { session: Session; busy: boolean; onCreate: () => void; onTicket: () => void }) { return <div className="pr-panel"><div className="panel-kicker"><GithubLogo /> GitHub delivery</div><h2>{session.pr_url ? "Draft pull request created" : "Prepare this branch for review"}</h2><p>OpenADE keeps the ticket key, branch, commit policy, and draft PR connected to this session.</p><dl><div><dt>Head</dt><dd><code>{session.branch}</code></dd></div><div><dt>Base</dt><dd><code>{session.base_branch}</code></dd></div>{session.ticket_key && <div><dt>Ticket</dt><dd><button className="link-button" onClick={onTicket}>{session.ticket_key}</button></dd></div>}</dl>{session.pr_url ? <button className="primary-wide" onClick={() => window.open(session.pr_url, "_blank")}><GithubLogo /> Open pull request</button> : <button className="primary-wide" disabled={busy} onClick={onCreate}>{busy ? <SpinnerGap className="spin" /> : <GitBranch />} Push branch and create draft PR</button>}<small>This action uses your locally authenticated GitHub CLI.</small></div>; }
-function TicketPanel({ ticket, session }: { ticket: Ticket | null; session: Session }) { return <div className="ticket-panel"><div className="panel-kicker"><TicketIcon /> Linked work item</div><h2>{ticket?.summary || session.ticket_key}</h2><p>{ticket ? `${ticket.status || "Status unavailable"} · ${ticket.assignee || "Unassigned"}` : "Ticket details are linked to this session. Configure the Jira CLI to load live metadata."}</p>{session.ticket_url && <button className="primary-wide" onClick={() => window.open(session.ticket_url, "_blank")}><TicketIcon /> Open in Jira</button>}<dl><div><dt>Required branch prefix</dt><dd><code>{session.ticket_key?.toLowerCase()}/</code></dd></div><div><dt>Current branch</dt><dd><code>{session.branch}</code></dd></div></dl></div>; }
-
 function Metric({ label, value, tone }: { label: string; value: number; tone: string }) { return <div className={`metric ${tone}`}><span>{label}</span><strong>{value}</strong></div>; }
 function PageHeader({ eyebrow, title, subtitle }: { eyebrow: string; title: string; subtitle: string }) { return <header className="page-header"><span className="eyebrow">{eyebrow}</span><h1>{title}</h1><p>{subtitle}</p></header>; }
 function StatusPill({ status, label }: { status: string; label?: string }) { return <span className={`status-pill ${status}`}><span className="status-dot" />{label ?? status.replace("-", " ")}</span>; }
-
-function cleanTranscript(value: string): string {
-  const lines = value.split("\n").map((line) => line.replace(/[^\x09\x20-\x7E\u00A0-\uFFFF]/g, "").trimEnd()).filter((line, index, all) => line.trim() || (index > 0 && all[index - 1].trim()));
-  return lines.slice(-220).join("\n");
-}
 
 async function selectRepository(): Promise<string> {
   const bridge = window as typeof window & {
