@@ -1,8 +1,8 @@
 {
   "name": "@openade/desktop",
   "private": true,
-  "version": "0.2.0",
-  "description": "OpenADE desktop app: session grid + terminals over the openade-daemon API (Tauri shell)",
+  "version": "0.3.0",
+  "description": "OpenADE Wails desktop shell for local agent sessions, worktrees, tickets, and pull requests",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -12,6 +12,8 @@
     "e2e": "playwright test"
   },
   "dependencies": {
+    "@phosphor-icons/react": "^2.1.10",
+    "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "^5.5.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
