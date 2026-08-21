@@ -13,7 +13,7 @@ export const defaultPreferences: Preferences = {
   theme: "graphite",
   default_agent: "claude",
   session_surface: "chat",
-  activity_detail: "expanded",
+  activity_detail: "compact",
 };
 
 export function loadPreferences(): Preferences {

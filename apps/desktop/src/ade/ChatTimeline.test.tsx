@@ -17,7 +17,7 @@ describe("ChatTimeline", () => {
       '{"type":"thread.started"}',
       '{"type":"item.started","item":{"type":"command_execution","command":"git status"}}',
     ].join("\n");
-    const { container } = render(<ChatTimeline session={session} output={output} />);
+    const { container } = render(<ChatTimeline session={session} output={output} activityExpanded />);
 
     const group = container.querySelector("details.activity-group");
     expect(group).not.toHaveAttribute("open");

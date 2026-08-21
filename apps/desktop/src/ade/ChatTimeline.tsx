@@ -81,8 +81,8 @@ function AssistantTurn({
 }
 
 function ActivityGroup({ activities, streaming, expanded }: { activities: ChatActivity[]; streaming: boolean; expanded: boolean }) {
-  const [open, setOpen] = useState(expanded);
-  useEffect(() => setOpen(expanded), [expanded]);
+  const [open, setOpen] = useState(expanded && !streaming);
+  useEffect(() => setOpen(streaming ? false : expanded), [expanded, streaming]);
   return (
     <details className="activity-group" open={open} onToggle={(event) => setOpen(event.currentTarget.open)}>
       <summary>
