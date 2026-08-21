@@ -165,7 +165,24 @@ function AppShell() {
 
   return (
     <div className={`ade ${themeClass(preferences.theme)} ${sidebarOpen ? "" : "sidebar-collapsed"}`}>
-      <Sidebar page={page} sessions={sessions} projects={visibleProjects} externalConversations={externalConversations} resumingConversationId={resumingConversationId} selectedId={selectedId} connected={connected} onPage={openPage} onOpen={openSession} onResumeExternal={resumeExternalConversation} onNewSession={openComposer} onToggle={() => setSidebarOpen(false)} />
+      <Sidebar
+        page={page}
+        sessions={sessions}
+        projects={visibleProjects}
+        externalConversations={externalConversations}
+        projectOrganization={preferences.project_organization}
+        projectSort={preferences.project_sort}
+        resumingConversationId={resumingConversationId}
+        selectedId={selectedId}
+        connected={connected}
+        onPage={openPage}
+        onOpen={openSession}
+        onResumeExternal={resumeExternalConversation}
+        onProjectOrganization={(projectOrganization) => updatePreferences({ ...preferences, project_organization: projectOrganization })}
+        onProjectSort={(projectSort) => updatePreferences({ ...preferences, project_sort: projectSort })}
+        onNewSession={openComposer}
+        onToggle={() => setSidebarOpen(false)}
+      />
 
       <main className="main-shell">
         <button className="sidebar-toggle icon-button" onClick={() => setSidebarOpen((value) => !value)} aria-label="Toggle sidebar"><SidebarSimple size={18} /></button>

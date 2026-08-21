@@ -87,6 +87,24 @@ describe("Tembo-inspired application shell", () => {
     expect(JSON.parse(localStorage.getItem("openade.preferences") ?? "{}").theme).toBe("glass");
   });
 
+  it("persists project organization and chat sorting from the sidebar menu", async () => {
+    const user = userEvent.setup();
+    render(<AppShell />);
+
+    await user.click(screen.getByRole("button", { name: "Project display settings" }));
+    expect(screen.getByRole("menu", { name: "Project display settings" })).toBeInTheDocument();
+    expect(screen.getByRole("menuitemradio", { name: "By project" })).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByRole("menuitemradio", { name: "Priority" })).toHaveAttribute("aria-checked", "true");
+
+    await user.click(screen.getByRole("menuitemradio", { name: "In one list" }));
+    expect(JSON.parse(localStorage.getItem("openade.preferences") ?? "{}").project_organization).toBe("list");
+
+    await user.click(screen.getByRole("button", { name: "Project display settings" }));
+    await user.click(screen.getByRole("menuitemradio", { name: "Last updated" }));
+    expect(JSON.parse(localStorage.getItem("openade.preferences") ?? "{}").project_sort).toBe("updated");
+    expect(screen.getByRole("button", { name: "Add project" })).toBeInTheDocument();
+  });
+
   it("shows local provider history under its project and resumes it in a direct TUI", async () => {
     localStorage.setItem("openade.preferences", JSON.stringify({ project_root: "/tmp" }));
     vi.mocked(scanWorkspace).mockResolvedValue({

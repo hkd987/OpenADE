@@ -1,6 +1,8 @@
 export type ThemePreference = "graphite" | "dusk" | "paper" | "glass" | "system";
 export type SessionSurface = "chat" | "terminal";
 export type ActivityDetail = "compact" | "expanded";
+export type ProjectOrganization = "project" | "list";
+export type ProjectSort = "priority" | "updated" | "manual";
 
 export interface Preferences {
   theme: ThemePreference;
@@ -8,6 +10,8 @@ export interface Preferences {
   session_surface: SessionSurface;
   activity_detail: ActivityDetail;
   project_root: string;
+  project_organization: ProjectOrganization;
+  project_sort: ProjectSort;
 }
 
 export const defaultPreferences: Preferences = {
@@ -16,6 +20,8 @@ export const defaultPreferences: Preferences = {
   session_surface: "chat",
   activity_detail: "compact",
   project_root: "",
+  project_organization: "project",
+  project_sort: "priority",
 };
 
 export function loadPreferences(): Preferences {

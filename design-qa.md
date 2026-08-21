@@ -52,6 +52,46 @@ passed
 
 ---
 
+# Project sidebar controls extension QA
+
+## Evidence
+
+- Source visual truth: `/var/folders/2h/k_vpn3_n7kl2knmtx_w78s940000gn/T/codex-clipboard-e228fb5d-4ea4-422b-b733-ce3c436c4c18.png` (expanded organization/sort menu) and `/var/folders/2h/k_vpn3_n7kl2knmtx_w78s940000gn/T/codex-clipboard-d17d3c8c-6e3c-4de6-93ba-e6f9029549d7.png` (collapsed header controls).
+- Rendered implementation: `../outputs/openade-project-sidebar.png` (grouped projects) and `../outputs/openade-project-sidebar-flat.png` (one-list chats), both 1,194 × 768 px native Wails windows in the Glass theme.
+- Combined comparison: `../outputs/openade-project-settings-comparison.png`; the 665 × 788 px source and a same-width native-app crop are shown without horizontal scaling.
+- State: Projects expanded, priority sort applied, grouped project hierarchy visible, ellipsis and add-project actions idle. The open menu was separately verified in the macOS accessibility tree with all five radio choices and their checked states.
+
+## Findings
+
+- P0: none.
+- P1: none.
+- P2: none.
+- P3: the reference is a warm Dusk crop with no primary navigation, while OpenADE retains its active Glass shell and existing navigation above Projects. Control order, menu dimensions, copy, check placement, and hierarchy match within the established shell.
+
+## Required fidelity surfaces
+
+- Fonts and typography: existing Inter tokens are retained; menu group labels are quieter than choices, selected values remain readable, and project/chat names truncate without colliding with the caret or actions.
+- Spacing and layout rhythm: the header holds Projects, disclosure, ellipsis, and plus on one baseline. The 174 px menu uses compact 28 px rows, a 12 px radius, and reserved check space so labels never shift when a choice changes.
+- Colors and tokens: all surfaces, borders, muted labels, hover states, and Glass blur reuse OpenADE theme variables. Paper, Graphite, Dusk, System, and Glass require no menu-specific override.
+- Image quality and assets: disclosure, check, folder, ellipsis, and plus use the existing Phosphor icon library. No placeholder asset, handcrafted SVG, or CSS-drawn icon was introduced.
+- Copy and content: “Organize sidebar,” “By project,” “In one list,” “Sort chats by,” “Priority,” “Last updated,” and “Manual order” reproduce the reference vocabulary.
+
+## Interactions tested
+
+- Opened and dismissed the project menu; outside-pointer and Escape dismissal are supported.
+- Switched between grouped projects and a flat chat list; the choice persists in local preferences.
+- Switched among priority, last-updated, and manual ordering; the choice persists and project ordering updates immediately.
+- Kept Recents chronological regardless of the project-section sort choice.
+- Collapsed and expanded the Projects section from its disclosure control.
+- Verified the plus action routes to Settings, where the workspace folder can be selected and scanned.
+- Checked the native macOS accessibility tree for the disclosure, menu trigger, add-project action, menu group labels, and checked radio states.
+
+## Final result
+
+passed
+
+---
+
 # Sites empty-state extension QA
 
 ## Evidence
