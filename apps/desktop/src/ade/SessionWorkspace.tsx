@@ -124,7 +124,7 @@ export function SessionWorkspace({ session, preferences, onBack, onRefresh }: { 
         <button className="icon-button" aria-label="Session actions"><DotsThree /></button>
       </header>
       <section className="conversation">
-        <div className="messages" ref={outputRef}><ChatTimeline session={session} output={output} /></div>
+        <div className="messages" ref={outputRef}><ChatTimeline session={session} output={output} activityExpanded={preferences.activity_detail === "expanded"} /></div>
         <form className="session-composer" onSubmit={submit}>
           <textarea
             value={input}

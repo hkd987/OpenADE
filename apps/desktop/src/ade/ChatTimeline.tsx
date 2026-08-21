@@ -8,12 +8,12 @@ import {
   TerminalWindow,
   Wrench,
 } from "@phosphor-icons/react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { relativeTime, Session } from "./api";
 import { ChatActivity, parseChatTranscript } from "./chat-model";
 import { MarkdownMessage } from "./MarkdownMessage";
 
-export function ChatTimeline({ session, output }: { session: Session; output: string }) {
+export function ChatTimeline({ session, output, activityExpanded = false }: { session: Session; output: string; activityExpanded?: boolean }) {
   const running = ["starting", "running", "waiting"].includes(session.status);
   const turns = useMemo(
     () => parseChatTranscript(output, session.prompt, running),
@@ -35,6 +35,7 @@ export function ChatTimeline({ session, output }: { session: Session; output: st
             activities={turn.activities}
             streaming={Boolean(turn.streaming)}
             agent={agentLabel(session.agent)}
+            activityExpanded={activityExpanded}
           />
         ),
       )}
@@ -47,11 +48,13 @@ function AssistantTurn({
   activities,
   streaming,
   agent,
+  activityExpanded,
 }: {
   markdown: string;
   activities: ChatActivity[];
   streaming: boolean;
   agent: string;
+  activityExpanded: boolean;
 }) {
   const [copied, setCopied] = useState(false);
   const copy = async () => {
@@ -62,7 +65,7 @@ function AssistantTurn({
   return (
     <article className="chat-assistant-turn">
       <header><span className="agent-avatar"><Cpu weight="fill" /></span><strong>{agent}</strong></header>
-      {activities.length > 0 && <ActivityGroup activities={activities} streaming={streaming} />}
+      {activities.length > 0 && <ActivityGroup activities={activities} streaming={streaming} expanded={activityExpanded} />}
       {markdown ? <MarkdownMessage>{markdown}</MarkdownMessage> : streaming ? (
         <div className="native-thinking"><SpinnerGap className="spin" /> Working through the task…</div>
       ) : null}
@@ -76,9 +79,11 @@ function AssistantTurn({
   );
 }
 
-function ActivityGroup({ activities, streaming }: { activities: ChatActivity[]; streaming: boolean }) {
+function ActivityGroup({ activities, streaming, expanded }: { activities: ChatActivity[]; streaming: boolean; expanded: boolean }) {
+  const [open, setOpen] = useState(streaming || expanded);
+  useEffect(() => setOpen(streaming || expanded), [expanded, streaming]);
   return (
-    <details className="activity-group" open={streaming}>
+    <details className="activity-group" open={open} onToggle={(event) => setOpen(event.currentTarget.open)}>
       <summary>
         {streaming ? <SpinnerGap className="spin" /> : <Check />}
         <span>{streaming ? activities.at(-1)?.title ?? "Working" : `${activities.length} work step${activities.length === 1 ? "" : "s"}`}</span>
