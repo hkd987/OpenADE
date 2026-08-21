@@ -23,6 +23,12 @@ type TerminalManager struct {
 	stopping map[string]bool
 }
 
+type TerminalLaunch struct {
+	Kind   string `json:"kind"`
+	Agent  string `json:"agent"`
+	Resume bool   `json:"resume"`
+}
+
 func NewTerminalManager(store *Store, dataDir string) *TerminalManager {
 	return &TerminalManager{
 		store: store, dataDir: dataDir,
@@ -30,21 +36,31 @@ func NewTerminalManager(store *Store, dataDir string) *TerminalManager {
 	}
 }
 
-func (m *TerminalManager) Create(session Session, title string) (TerminalSession, error) {
+func (m *TerminalManager) Create(session Session, title string, launches ...TerminalLaunch) (TerminalSession, error) {
 	terminals, err := m.store.ListTerminals(session.ID)
 	if err != nil {
 		return TerminalSession{}, err
 	}
+	launch := TerminalLaunch{Kind: "shell"}
+	if len(launches) > 0 {
+		launch = launches[0]
+	}
+	if launch.Kind == "" {
+		launch.Kind = "shell"
+	}
+	if title == "" && launch.Kind == "agent" {
+		title = fmt.Sprintf("%s TUI", agentDisplayName(launch.Agent, session.Agent))
+	}
 	if title == "" {
 		title = fmt.Sprintf("Terminal %d", len(terminals)+1)
 	}
-	shell := os.Getenv("SHELL")
-	if shell == "" {
-		shell = "/bin/zsh"
+	program, args, err := m.command(session, launch)
+	if err != nil {
+		return TerminalSession{}, err
 	}
-	cmd := exec.Command(shell, "-l")
+	cmd := exec.Command(program, args...)
 	cmd.Dir = session.WorktreePath
-	cmd.Env = append(os.Environ(), "TERM=xterm-256color", "COLORTERM=truecolor", "OPENADE_SESSION_ID="+session.ID)
+	cmd.Env = append(os.Environ(), "TERM=xterm-256color", "COLORTERM=truecolor", "OPENADE_SESSION_ID="+session.ID, "OPENADE_TERMINAL_KIND="+launch.Kind)
 	ptmx, err := pty.StartWithSize(cmd, &pty.Winsize{Rows: 32, Cols: 100})
 	if err != nil {
 		return TerminalSession{}, fmt.Errorf("start project terminal: %w", err)
@@ -69,6 +85,64 @@ func (m *TerminalManager) Create(session Session, title string) (TerminalSession
 	go m.readOutput(terminal.ID, live, transcript)
 	go m.wait(terminal.ID, live, transcript)
 	return terminal, nil
+}
+
+func (m *TerminalManager) command(session Session, launch TerminalLaunch) (string, []string, error) {
+	if launch.Kind != "agent" {
+		shell := os.Getenv("SHELL")
+		if shell == "" {
+			shell = "/bin/zsh"
+		}
+		return shell, []string{"-l"}, nil
+	}
+
+	agent := launch.Agent
+	if agent == "" {
+		agent = session.Agent
+	}
+	agent = map[string]string{"claude-code": "claude", "codex-cli": "codex"}[agent]
+	if agent == "" {
+		agent = session.Agent
+	}
+	if agent != "codex" && agent != "claude" {
+		return "", nil, fmt.Errorf("direct TUI is only supported for Codex and Claude Code")
+	}
+	program, err := resolveProgram(agent)
+	if err != nil {
+		return "", nil, err
+	}
+	providerID := ""
+	if launch.Resume {
+		transcript, _ := os.ReadFile(filepath.Join(m.dataDir, "transcripts", session.ID+".log"))
+		providerID = providerSessionID(transcript, agent)
+	}
+	switch agent {
+	case "codex":
+		if providerID != "" {
+			return program, []string{"resume", "--include-non-interactive", "--no-alt-screen", "-C", session.WorktreePath, providerID}, nil
+		}
+		return program, []string{"--no-alt-screen", "-C", session.WorktreePath}, nil
+	case "claude":
+		if providerID != "" {
+			return program, []string{"--resume", providerID, "--permission-mode", "acceptEdits"}, nil
+		}
+		return program, []string{"--permission-mode", "acceptEdits"}, nil
+	default:
+		return "", nil, fmt.Errorf("unsupported TUI agent %s", agent)
+	}
+}
+
+func agentDisplayName(agent, fallback string) string {
+	if agent == "" {
+		agent = fallback
+	}
+	if agent == "codex" || agent == "codex-cli" {
+		return "Codex"
+	}
+	if agent == "claude" || agent == "claude-code" {
+		return "Claude"
+	}
+	return "Agent"
 }
 
 func (m *TerminalManager) readOutput(id string, live *liveSession, transcript *os.File) {

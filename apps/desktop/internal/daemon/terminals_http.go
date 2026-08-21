@@ -25,7 +25,10 @@ func (d *Daemon) handleCreateTerminal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Title string `json:"title"`
+		Title  string `json:"title"`
+		Kind   string `json:"kind"`
+		Agent  string `json:"agent"`
+		Resume bool   `json:"resume"`
 	}
 	if r.ContentLength > 0 {
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -33,7 +36,7 @@ func (d *Daemon) handleCreateTerminal(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	terminal, err := d.terminals.Create(session, body.Title)
+	terminal, err := d.terminals.Create(session, body.Title, TerminalLaunch{Kind: body.Kind, Agent: body.Agent, Resume: body.Resume})
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return

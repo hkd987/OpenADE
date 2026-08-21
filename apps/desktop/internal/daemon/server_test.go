@@ -120,6 +120,65 @@ func TestProjectTerminalsAreIndependentAndIndexed(t *testing.T) {
 	_ = d.sessions.Stop(session.ID)
 }
 
+func TestAgentTerminalLaunchesCodexTUIAndResumesProviderSession(t *testing.T) {
+	repo := createFixtureRepository(t)
+	binDir := t.TempDir()
+	fakeCodex := filepath.Join(binDir, "codex")
+	script := `#!/bin/sh
+printf '%s\n' '{"type":"thread.started","thread_id":"thread-tui"}'
+printf 'ARGS:%s\n' "$*"
+`
+	if err := os.WriteFile(fakeCodex, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	d, err := New(Config{DataDir: t.TempDir(), Addr: "127.0.0.1:0"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.store.Close()
+
+	session, err := d.sessions.Create(context.Background(), CreateSessionRequest{
+		Title: "TUI fixture", Prompt: "first turn", Agent: "codex", RepoRoot: repo, BaseBranch: "main",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		transcript, _ := os.ReadFile(filepath.Join(d.config.DataDir, "transcripts", session.ID+".log"))
+		if strings.Contains(string(transcript), "thread-tui") {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	body := `{"kind":"agent","agent":"codex","resume":true}`
+	request := httptest.NewRequest(http.MethodPost, "/api/sessions/"+session.ID+"/terminals", strings.NewReader(body))
+	response := httptest.NewRecorder()
+	d.routes().ServeHTTP(response, request)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("create agent terminal status=%d body=%s", response.Code, response.Body.String())
+	}
+	var terminal TerminalSession
+	if err := json.Unmarshal(response.Body.Bytes(), &terminal); err != nil {
+		t.Fatal(err)
+	}
+	deadline = time.Now().Add(3 * time.Second)
+	var transcript []byte
+	for time.Now().Before(deadline) {
+		transcript, _ = os.ReadFile(filepath.Join(d.config.DataDir, "terminal-transcripts", terminal.ID+".log"))
+		if strings.Contains(string(transcript), "ARGS:") {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	output := string(transcript)
+	if !strings.Contains(output, "resume --include-non-interactive --no-alt-screen") || !strings.Contains(output, "thread-tui") {
+		t.Fatalf("Codex TUI was not resumed directly: %q", output)
+	}
+}
+
 func TestCompletedCodexSessionCanResumeWithFollowUpMessage(t *testing.T) {
 	repo := createFixtureRepository(t)
 	binDir := t.TempDir()
