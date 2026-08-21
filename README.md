@@ -8,6 +8,8 @@ The desktop window is only a client. Closing it does not stop active agents or p
 
 > This branch contains the current Go + Wails desktop implementation. The older Rust/Tauri prototype remains in `crates/` as reference code, but it is not the runtime described below.
 
+![OpenADE home workspace with isolated active sessions](docs/img/openade-home.png)
+
 ## Current capabilities
 
 - **Isolated work per task** — every session gets a dedicated Git worktree and branch. Ticket keys are included in branch and pull-request naming when provided.
@@ -24,6 +26,26 @@ The desktop window is only a client. Closing it does not stop active agents or p
 - **Reusable workflows** — start from focused delivery, debugging, review, and testing prompts; provider commands and local skills are available from chat.
 - **Themes** — Graphite, Dusk, Paper, System, and an optional Glass appearance.
 - **Sites surface** — presentation-only Sites UI with search, refresh, and create hooks. Persistence and execution are intentionally not implemented here.
+
+## Product tour
+
+### See every agent and its priority at a glance
+
+The Sessions view keeps running, completed, and failed work visible across projects, with linked tickets and current status in one scan-friendly table.
+
+![OpenADE sessions overview](docs/img/openade-sessions.png)
+
+### Review native chat and code changes together
+
+Structured Codex and Claude output becomes readable Markdown while the Changes panel keeps the file list and diff attached to the same session.
+
+![OpenADE native chat beside the changes review panel](docs/img/openade-native-chat-review.png)
+
+### Use the provider's real terminal interface
+
+Direct TUI renders Claude Code or Codex inside the daemon-owned PTY. It resizes with the window and survives closing and reopening the desktop client.
+
+![OpenADE Direct TUI running Claude Code](docs/img/openade-direct-tui.png)
 
 ## Requirements
 
