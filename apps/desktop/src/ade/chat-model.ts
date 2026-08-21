@@ -62,7 +62,7 @@ export function parseChatTranscript(
     if (type === "item.completed" && item?.type === "command_execution") {
       const output = String(item.aggregated_output ?? "").trim();
       const command = String(item.command ?? "Command finished");
-      addActivity(assistant, "command", commandTitle(command), compactDetail(output));
+      completeActivity(assistant, "command", commandTitle(command), compactDetail(output));
     }
     if (type === "item.completed" && item?.type === "agent_message") {
       finalMessage = String(item.text ?? "").trim();
@@ -121,6 +121,20 @@ function addActivity(
   const previous = turn.activities.at(-1);
   if (previous?.kind === kind && previous.title === title && previous.detail === detail) return;
   turn.activities.push({ id: `${turn.id}-activity-${turn.activities.length}`, kind, title, detail });
+}
+
+function completeActivity(
+  turn: ChatTurn,
+  kind: ChatActivityKind,
+  title: string,
+  detail?: string,
+) {
+  const existing = [...turn.activities].reverse().find((activity) => activity.kind === kind && activity.title === title);
+  if (existing) {
+    existing.detail = detail;
+    return;
+  }
+  addActivity(turn, kind, title, detail);
 }
 
 function commandTitle(command: string): string {

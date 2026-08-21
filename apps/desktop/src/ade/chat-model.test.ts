@@ -13,6 +13,8 @@ describe("parseChatTranscript", () => {
     expect(turns).toHaveLength(2);
     expect(turns[1].markdown).toContain("## Ready");
     expect(turns[1].activities.map((item) => item.title)).toContain("Ran git status");
+    expect(turns[1].activities.filter((item) => item.kind === "command")).toHaveLength(1);
+    expect(turns[1].activities.find((item) => item.kind === "command")?.detail).toBe("clean");
     expect(turns[1].markdown).not.toContain("git status");
   });
 

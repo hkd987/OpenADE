@@ -34,7 +34,7 @@ type WorkTab = "review" | "terminal" | "pull-request" | "ticket";
 export function SessionWorkspace({ session, preferences, onBack, onRefresh }: { session: Session; preferences: Preferences; onBack: () => void; onRefresh: () => Promise<void> }) {
   const defaultTab: WorkTab = preferences.session_surface === "terminal" ? "terminal" : "review";
   const [tab, setTab] = useState<WorkTab>(defaultTab);
-  const [rightOpen, setRightOpen] = useState(true);
+  const [rightOpen, setRightOpen] = useState(session.agent === "shell" || preferences.session_surface === "terminal");
   const [ticket, setTicket] = useState<Ticket | null>(null);
   const [panelError, setPanelError] = useState<string | null>(null);
   const [input, setInput] = useState("");
@@ -44,14 +44,15 @@ export function SessionWorkspace({ session, preferences, onBack, onRefresh }: { 
   const outputRef = useRef<HTMLDivElement>(null);
   const active = ["running", "starting", "waiting"].includes(session.status);
   const resumable = ["claude", "claude-code", "codex", "codex-cli"].includes(session.agent) && !active;
-  const canMessage = active || resumable;
+  const chatCapable = session.agent !== "shell";
+  const canMessage = chatCapable && (active || resumable);
 
   useEffect(() => {
     setTab(defaultTab);
-    setRightOpen(true);
+    setRightOpen(session.agent === "shell" || preferences.session_surface === "terminal");
     setPanelError(null);
     setTicket(null);
-  }, [session.id, streamVersion]);
+  }, [defaultTab, preferences.session_surface, session.agent, session.id]);
 
   useEffect(() => {
     setOutput("");
@@ -112,20 +113,32 @@ export function SessionWorkspace({ session, preferences, onBack, onRefresh }: { 
     }
   };
 
+  const openSurface = (surface: WorkTab) => {
+    setTab(surface);
+    setRightOpen(true);
+  };
+
   return (
-    <div className={`session-workspace ${rightOpen ? "with-panel" : ""}`}>
+    <div className={`session-workspace ${rightOpen ? "with-panel" : ""} ${rightOpen && tab === "review" ? "panel-review" : ""}`}>
       <header className="session-header">
         <button className="icon-button" onClick={onBack} aria-label="Back"><ArrowLeft /></button>
         <span className={`status-dot ${session.status}`} />
-        <div className="session-title"><h1>{session.title}</h1><p>{projectName(session.repo_root)} · <code>{session.branch}</code></p></div>
+        <div className="session-title"><h1>{session.title}</h1><p>{projectName(session.repo_root)} <span>·</span> <code title={session.branch}>{session.branch}</code></p></div>
         <StatusPill status={session.status} />
         {active && <button className="header-stop" onClick={() => void stopSession(session.id).then(onRefresh)}><Square weight="fill" /> Stop</button>}
-        <button className="icon-button" onClick={() => setRightOpen((value) => !value)} aria-label="Toggle work panel"><SidebarSimple /></button>
+        <nav className="session-work-actions" aria-label="Work surfaces">
+          <SurfaceButton active={rightOpen && tab === "review"} onClick={() => openSurface("review")} icon={<GitDiff />} label="Changes" />
+          <SurfaceButton active={rightOpen && tab === "terminal"} onClick={() => openSurface("terminal")} icon={<TerminalWindow />} label="Terminal" />
+          <SurfaceButton active={rightOpen && tab === "pull-request"} onClick={() => openSurface("pull-request")} icon={<GithubLogo />} label="PR" />
+        </nav>
+        <button className="icon-button panel-toggle" onClick={() => setRightOpen((value) => !value)} aria-label={rightOpen ? "Close work panel" : "Open work panel"}><SidebarSimple /></button>
         <button className="icon-button" aria-label="Session actions"><DotsThree /></button>
       </header>
       <section className="conversation">
-        <div className="messages" ref={outputRef}><ChatTimeline session={session} output={output} activityExpanded={preferences.activity_detail === "expanded"} /></div>
-        <form className="session-composer" onSubmit={submit}>
+        <div className="messages" ref={outputRef}>
+          {chatCapable ? <ChatTimeline session={session} output={output} activityExpanded={preferences.activity_detail === "expanded"} /> : <div className="shell-session-note"><TerminalWindow /><div><strong>Terminal run</strong><p>This run stays in the terminal so command output never gets mixed into chat.</p></div></div>}
+        </div>
+        {canMessage ? <form className="session-composer" onSubmit={submit}>
           <textarea
             value={input}
             onChange={(event) => setInput(event.target.value)}
@@ -143,7 +156,7 @@ export function SessionWorkspace({ session, preferences, onBack, onRefresh }: { 
             <span className="runtime-chip"><span className={`status-dot ${session.status}`} />{active ? `${agentLabel(session.agent)} is attached` : resumable ? "Conversation can continue" : `Run ${session.status}`}</span>
             <button className="send-button" disabled={!canMessage || !input.trim()} aria-label="Send message"><ArrowUp weight="bold" /></button>
           </div>
-        </form>
+        </form> : <div className="session-closed-state"><span className={`status-dot ${session.status}`} />{chatCapable ? `This ${agentLabel(session.agent)} run is ${session.status}` : "Use the Terminal panel to inspect this run"}</div>}
       </section>
       {rightOpen && (
         <aside className="work-panel">
@@ -165,6 +178,10 @@ export function SessionWorkspace({ session, preferences, onBack, onRefresh }: { 
 
 function TabButton({ active, icon, label, onClick }: { active: boolean; icon: ReactNode; label: string; onClick: () => void }) {
   return <button className={active ? "active" : ""} onClick={onClick}>{icon}{label}</button>;
+}
+
+function SurfaceButton({ active, icon, label, onClick }: { active: boolean; icon: ReactNode; label: string; onClick: () => void }) {
+  return <button className={active ? "active" : ""} onClick={onClick}>{icon}<span>{label}</span></button>;
 }
 
 function PRPanel({ session, busy, onCreate, onTicket }: { session: Session; busy: boolean; onCreate: () => void; onTicket: () => void }) {
