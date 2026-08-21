@@ -164,8 +164,11 @@ function AppShell() {
   };
 
   return (
-    <div className={`ade ${themeClass(preferences.theme)} ${sidebarOpen ? "" : "sidebar-collapsed"}`}>
-      <Sidebar
+    <div
+      className={`ade ${themeClass(preferences.theme)} ${sidebarOpen ? "" : "sidebar-collapsed"}`}
+      style={sidebarOpen ? undefined : { gridTemplateColumns: "minmax(0, 1fr)" }}
+    >
+      {sidebarOpen && <Sidebar
         page={page}
         sessions={sessions}
         projects={visibleProjects}
@@ -182,10 +185,10 @@ function AppShell() {
         onProjectSort={(projectSort) => updatePreferences({ ...preferences, project_sort: projectSort })}
         onNewSession={openComposer}
         onToggle={() => setSidebarOpen(false)}
-      />
+      />}
 
       <main className="main-shell">
-        <button className="sidebar-toggle icon-button" onClick={() => setSidebarOpen((value) => !value)} aria-label="Toggle sidebar"><SidebarSimple size={18} /></button>
+        {!sidebarOpen && <button className="sidebar-toggle icon-button" onClick={() => setSidebarOpen(true)} aria-label="Toggle sidebar"><SidebarSimple size={18} /></button>}
         {!connected && <div className="connection-banner"><SpinnerGap className="spin" /> Connecting to the local daemon… {error}</div>}
         {connected && error && <button className="error-toast" onClick={() => setError(null)}><span>{error}</span><X /></button>}
         {selected ? (

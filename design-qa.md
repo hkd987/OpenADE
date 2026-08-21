@@ -52,6 +52,46 @@ passed
 
 ---
 
+# Seamless macOS shell and session inspector QA
+
+## Evidence
+
+- Source visual truth: `/var/folders/2h/k_vpn3_n7kl2knmtx_w78s940000gn/T/codex-clipboard-5a5977c9-1081-46e8-9448-ab5ec000d2fa.png` (full-height ChatGPT desktop chrome and right utility rail), `/var/folders/2h/k_vpn3_n7kl2knmtx_w78s940000gn/T/codex-clipboard-c176c88f-dd64-42bd-935d-23db5b22a1ef.png` (prior top-right work tabs), and `/var/folders/2h/k_vpn3_n7kl2knmtx_w78s940000gn/T/codex-clipboard-11bd8f42-5890-4a56-99c5-1d5600625587.png` (collapsed-sidebar clipping defect).
+- Rendered implementation: `../outputs/openade-session-inspector-closed.jpg`, `../outputs/openade-session-inspector-open.jpg`, and `../outputs/openade-sidebar-collapsed-clean.jpg` at 1,236 × 768 px in the native Wails app.
+- Combined reference/implementation input: `../outputs/openade-shell-comparison.jpg`; desired seamless chrome and the prior collapse defect are paired with the corrected inspector-open and sidebar-collapsed states.
+- State: completed Codex chat, PR inspector closed/open, sidebar closed/restored, Glass theme.
+
+## Findings
+
+- P0: none.
+- P1: none after correction. Native testing caught the unmounted workspace being auto-placed into the obsolete zero-width sidebar column; the collapsed grid now removes that column entirely.
+- P2: none.
+- P3: OpenADE keeps a labeled 58 px developer-tool rail rather than ChatGPT's narrower icon-only output rail. The labels reduce ambiguity among Changes, Terminal, and PR and are intentional for a multi-agent development workspace.
+
+## Required fidelity surfaces
+
+- Native chrome: the Wails macOS window uses an inset hidden title bar with full-size content and no toolbar separator. Traffic lights sit inside the sidebar or workspace field instead of in a separate title strip.
+- Sidebar behavior: closing the sidebar unmounts its background, padding, border, scroll area, and descendants. The workspace receives the full grid width; the restore control remains clear of the traffic lights.
+- Work-surface hierarchy: session status and actions remain in the drag-capable header, while Changes, Terminal, and PR live in a persistent right inspector rail. Selecting a tool opens its panel; selecting the active tool or its close action dismisses the panel.
+- Layout rhythm: the session header reserves 20 px of titlebar inset, the inspector rail is 58 px, and the conversation/panel columns use zero-safe minmax sizing so neither side clips or forces horizontal overflow.
+- Accessibility: the rail is named “Session tools,” each tool exposes pressed state, each open panel has a distinct accessible name, and the sidebar restore action remains keyboard-addressable.
+
+## Interactions tested
+
+- Opened a real indexed Codex session in the packaged native app.
+- Opened and closed the PR inspector from the right rail; verified selected state and panel naming through the macOS accessibility tree.
+- Collapsed the sidebar with the PR inspector open and verified the conversation, panel, rail, header, and composer all remained visible.
+- Restored the sidebar and dismissed the active inspector tool.
+- Verified no Changes, Terminal, or PR tabs remain in the top-right session header.
+- Verified the titlebar separator is absent and the content background continues behind the macOS traffic lights.
+- Added component coverage for complete sidebar removal, one-column collapsed layout, inspector placement, active-state toggling, and panel dismissal.
+
+## Final result
+
+passed
+
+---
+
 # Project sidebar controls extension QA
 
 ## Evidence

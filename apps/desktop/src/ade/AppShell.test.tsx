@@ -54,6 +54,19 @@ describe("Tembo-inspired application shell", () => {
     expect(screen.getByText("Worktree isolated")).toBeInTheDocument();
   });
 
+  it("removes all sidebar chrome when the sidebar is collapsed", async () => {
+    const user = userEvent.setup();
+    const { container } = render(<AppShell />);
+    expect(container.querySelector(".sidebar")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Collapse sidebar" }));
+
+    expect(container.querySelector(".ade")).toHaveClass("sidebar-collapsed");
+    expect(container.querySelector(".sidebar")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Toggle sidebar" })).toBeInTheDocument();
+    expect(getComputedStyle(container.querySelector(".ade")!).gridTemplateColumns).toBe("minmax(0, 1fr)");
+  });
+
   it("moves from navigation into reusable agent templates", async () => {
     const user = userEvent.setup();
     render(<AppShell />);

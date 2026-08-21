@@ -12,6 +12,7 @@ import (
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
+	"github.com/wailsapp/wails/v2/pkg/options/mac"
 )
 
 //go:embed all:dist
@@ -33,6 +34,7 @@ func main() {
 		DisableResize:    false,
 		Fullscreen:       false,
 		BackgroundColour: &options.RGBA{R: 14, G: 16, B: 19, A: 1},
+		Mac:              &mac.Options{TitleBar: mac.TitleBarHiddenInset()},
 		AssetServer:      &assetserver.Options{Assets: assets},
 		OnStartup:        app.startup,
 		OnShutdown:       app.shutdown,

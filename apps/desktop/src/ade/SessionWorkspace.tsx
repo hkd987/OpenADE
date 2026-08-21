@@ -6,7 +6,6 @@ import {
   GitDiff,
   GithubLogo,
   Plus,
-  SidebarSimple,
   SpinnerGap,
   Square,
   TerminalWindow,
@@ -132,7 +131,11 @@ export function SessionWorkspace({ session, preferences, onBack, onRefresh }: { 
     }
   };
 
-  const openSurface = (surface: WorkTab) => {
+  const toggleSurface = (surface: WorkTab) => {
+    if (rightOpen && tab === surface) {
+      setRightOpen(false);
+      return;
+    }
     setTab(surface);
     setRightOpen(true);
   };
@@ -145,12 +148,6 @@ export function SessionWorkspace({ session, preferences, onBack, onRefresh }: { 
         <div className="session-title"><h1>{session.title}</h1><p>{projectName(session.repo_root)} <span>·</span> <code title={session.branch}>{session.branch}</code></p></div>
         <StatusPill status={session.status} />
         {active && <button className="header-stop" onClick={() => void stopSession(session.id).then(onRefresh)}><Square weight="fill" /> Stop</button>}
-        <nav className="session-work-actions" aria-label="Work surfaces">
-          <SurfaceButton active={rightOpen && tab === "review"} onClick={() => openSurface("review")} icon={<GitDiff />} label="Changes" />
-          <SurfaceButton active={rightOpen && tab === "terminal"} onClick={() => openSurface("terminal")} icon={<TerminalWindow />} label="Terminal" />
-          <SurfaceButton active={rightOpen && tab === "pull-request"} onClick={() => openSurface("pull-request")} icon={<GithubLogo />} label="PR" />
-        </nav>
-        <button className="icon-button panel-toggle" onClick={() => setRightOpen((value) => !value)} aria-label={rightOpen ? "Close work panel" : "Open work panel"}><SidebarSimple /></button>
         <button className="icon-button" aria-label="Session actions"><DotsThree /></button>
       </header>
       <section className={`conversation ${tuiMode ? "tui-conversation" : ""}`}>
@@ -194,29 +191,39 @@ export function SessionWorkspace({ session, preferences, onBack, onRefresh }: { 
         </form> : <div className="session-closed-state"><span className={`status-dot ${session.status}`} />{chatCapable ? `This ${agentLabel(session.agent)} run is ${session.status}` : "Use the Terminal panel to inspect this run"}</div>}</>}
       </section>
       {rightOpen && (
-        <aside className="work-panel">
-          <div className="work-tabs">
-            <TabButton active={tab === "review"} onClick={() => setTab("review")} icon={<GitDiff />} label="Changes" />
-            <TabButton active={tab === "terminal"} onClick={() => setTab("terminal")} icon={<TerminalWindow />} label="Terminal" />
-            <TabButton active={tab === "pull-request"} onClick={() => setTab("pull-request")} icon={<GithubLogo />} label="Pull request" />
-            {chatCapable && <button className="icon-button" onClick={() => setRightOpen(false)} aria-label="Close work panel"><X /></button>}
-          </div>
+        <aside className="work-panel" aria-label={`${workTabLabel(tab)} panel`}>
+          <header className="work-panel-header">
+            <span>{workTabIcon(tab)}<strong>{workTabLabel(tab)}</strong></span>
+            {chatCapable && <button className="icon-button" onClick={() => setRightOpen(false)} aria-label={`Close ${workTabLabel(tab)} panel`}><X /></button>}
+          </header>
           <div className="panel-body">
             {panelError && <div className="inline-error">{panelError}</div>}
             {tab === "terminal" ? <TerminalWorkspace session={session} /> : tab === "review" ? <ReviewWorkspace sessionId={session.id} /> : tab === "ticket" ? <TicketPanel ticket={ticket} session={session} /> : <PRPanel session={session} busy={busy} onCreate={createPR} onTicket={() => setTab("ticket")} />}
           </div>
         </aside>
       )}
+      <aside className="inspector-rail" aria-label="Session tools">
+        <InspectorButton active={rightOpen && tab === "review"} onClick={() => toggleSurface("review")} icon={<GitDiff />} label="Changes" />
+        <InspectorButton active={rightOpen && tab === "terminal"} onClick={() => toggleSurface("terminal")} icon={<TerminalWindow />} label="Terminal" />
+        <InspectorButton active={rightOpen && tab === "pull-request"} onClick={() => toggleSurface("pull-request")} icon={<GithubLogo />} label="PR" />
+      </aside>
     </div>
   );
 }
 
-function TabButton({ active, icon, label, onClick }: { active: boolean; icon: ReactNode; label: string; onClick: () => void }) {
-  return <button className={active ? "active" : ""} onClick={onClick}>{icon}{label}</button>;
+function InspectorButton({ active, icon, label, onClick }: { active: boolean; icon: ReactNode; label: string; onClick: () => void }) {
+  return <button className={active ? "active" : ""} onClick={onClick} aria-label={label} aria-pressed={active} title={label}>{icon}<span>{label}</span></button>;
 }
 
-function SurfaceButton({ active, icon, label, onClick }: { active: boolean; icon: ReactNode; label: string; onClick: () => void }) {
-  return <button className={active ? "active" : ""} onClick={onClick}>{icon}<span>{label}</span></button>;
+function workTabLabel(tab: WorkTab): string {
+  return ({ review: "Changes", terminal: "Terminal", "pull-request": "Pull request", ticket: "Ticket" } as Record<WorkTab, string>)[tab];
+}
+
+function workTabIcon(tab: WorkTab): ReactNode {
+  if (tab === "terminal") return <TerminalWindow />;
+  if (tab === "pull-request") return <GithubLogo />;
+  if (tab === "ticket") return <TicketIcon />;
+  return <GitDiff />;
 }
 
 function PRPanel({ session, busy, onCreate, onTicket }: { session: Session; busy: boolean; onCreate: () => void; onTicket: () => void }) {
