@@ -88,11 +88,27 @@ export interface Ticket {
   fetched_at: string;
 }
 
+export interface ExternalConversation {
+  id: string;
+  provider: "codex" | "claude";
+  title: string;
+  cwd: string;
+  project_root: string;
+  updated_at: string;
+}
+
+export interface WorkspaceScan {
+  root: string;
+  projects: string[];
+  conversations: ExternalConversation[];
+}
+
 export interface CreateSessionInput {
   title: string;
   prompt: string;
   agent: string;
   mode?: "chat" | "tui";
+  resume_id?: string;
   repo_root: string;
   base_branch: string;
   ticket_key?: string;
@@ -138,12 +154,16 @@ export async function listProjects(): Promise<string[]> {
   return payload.projects ?? [];
 }
 
-export async function scanProjects(root: string): Promise<string[]> {
-  const payload = await request<{ projects: string[] }>("/api/projects/scan", {
+export async function scanWorkspace(root: string): Promise<WorkspaceScan> {
+  const payload = await request<WorkspaceScan>("/api/projects/scan", {
     method: "POST",
     body: JSON.stringify({ root }),
   });
-  return payload.projects ?? [];
+  return {
+    root: payload.root ?? root,
+    projects: payload.projects ?? [],
+    conversations: payload.conversations ?? [],
+  };
 }
 
 export const createSession = (input: CreateSessionInput) =>

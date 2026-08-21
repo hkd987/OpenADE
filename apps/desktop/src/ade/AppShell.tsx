@@ -23,11 +23,12 @@ import {
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import {
   createSession,
+  ExternalConversation,
   getMeta,
   listProjects,
   listPullRequests,
   listSessions,
-  scanProjects,
+  scanWorkspace,
   Meta,
   projectName,
   PullRequest,
@@ -61,12 +62,14 @@ function AppShell() {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [projects, setProjects] = useState<string[]>([]);
   const [scannedProjects, setScannedProjects] = useState<string[]>([]);
+  const [externalConversations, setExternalConversations] = useState<ExternalConversation[]>([]);
   const [meta, setMeta] = useState<Meta | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [preferences, setPreferences] = useState<Preferences>(loadPreferences);
   const [error, setError] = useState<string | null>(null);
   const [connected, setConnected] = useState(false);
+  const [resumingConversationId, setResumingConversationId] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -95,10 +98,14 @@ function AppShell() {
   useEffect(() => {
     if (!preferences.project_root.trim()) {
       setScannedProjects([]);
+      setExternalConversations([]);
       return;
     }
-    void scanProjects(preferences.project_root)
-      .then(setScannedProjects)
+    void scanWorkspace(preferences.project_root)
+      .then((result) => {
+        setScannedProjects(result.projects);
+        setExternalConversations(result.conversations);
+      })
       .catch((reason) => setError(reason instanceof Error ? reason.message : String(reason)));
   }, [preferences.project_root]);
 
@@ -132,10 +139,32 @@ function AppShell() {
     setSelectedId(null);
     window.setTimeout(() => document.querySelector<HTMLTextAreaElement>("[data-main-composer]")?.focus(), 0);
   };
+  const resumeExternalConversation = async (conversation: ExternalConversation) => {
+    if (resumingConversationId) return;
+    setResumingConversationId(`${conversation.provider}:${conversation.id}`);
+    setError(null);
+    try {
+      const session = await createSession({
+        title: conversation.title,
+        prompt: "",
+        agent: conversation.provider,
+        mode: "tui",
+        resume_id: conversation.id,
+        repo_root: conversation.project_root,
+        base_branch: "HEAD",
+      });
+      await refresh();
+      openSession(session.id);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setResumingConversationId(null);
+    }
+  };
 
   return (
     <div className={`ade ${themeClass(preferences.theme)} ${sidebarOpen ? "" : "sidebar-collapsed"}`}>
-      <Sidebar page={page} sessions={sessions} projects={visibleProjects} selectedId={selectedId} connected={connected} onPage={openPage} onOpen={openSession} onNewSession={openComposer} onToggle={() => setSidebarOpen(false)} />
+      <Sidebar page={page} sessions={sessions} projects={visibleProjects} externalConversations={externalConversations} resumingConversationId={resumingConversationId} selectedId={selectedId} connected={connected} onPage={openPage} onOpen={openSession} onResumeExternal={resumeExternalConversation} onNewSession={openComposer} onToggle={() => setSidebarOpen(false)} />
 
       <main className="main-shell">
         <button className="sidebar-toggle icon-button" onClick={() => setSidebarOpen((value) => !value)} aria-label="Toggle sidebar"><SidebarSimple size={18} /></button>
