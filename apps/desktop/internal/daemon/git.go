@@ -76,8 +76,11 @@ func createWorktree(ctx context.Context, repo, path, branch, base string) error 
 	return nil
 }
 
-func worktreeDiff(ctx context.Context, path string) (string, error) {
-	return gitOutput(ctx, path, "diff", "--no-ext-diff", "--stat", "--patch")
+func worktreeDiff(ctx context.Context, path, base string) (string, error) {
+	if strings.TrimSpace(base) == "" {
+		base = "HEAD"
+	}
+	return gitOutput(ctx, path, "diff", "--no-ext-diff", "--stat", "--patch", base, "--")
 }
 
 func worktreeFiles(ctx context.Context, path string) ([]string, error) {

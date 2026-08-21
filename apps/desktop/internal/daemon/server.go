@@ -254,7 +254,7 @@ func (d *Daemon) handleDiff(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, err)
 		return
 	}
-	diff, err := worktreeDiff(r.Context(), session.WorktreePath)
+	diff, err := worktreeDiff(r.Context(), session.WorktreePath, session.BaseBranch)
 	if err != nil {
 		writeError(w, 500, err)
 		return

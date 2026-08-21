@@ -41,6 +41,13 @@ export function SessionWorkspace({ session, onBack, onRefresh }: { session: Sess
   const active = ["running", "starting", "waiting"].includes(session.status);
 
   useEffect(() => {
+    setTab("review");
+    setRightOpen(true);
+    setPanelError(null);
+    setTicket(null);
+  }, [session.id]);
+
+  useEffect(() => {
     setOutput("");
     const socket = new WebSocket(streamURL(session.id));
     socket.onmessage = (event) => {
