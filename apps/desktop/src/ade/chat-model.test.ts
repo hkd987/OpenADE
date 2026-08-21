@@ -7,6 +7,7 @@ describe("parseChatTranscript", () => {
       '{"type":"thread.started","thread_id":"thread-1"}',
       '{"type":"item.started","item":{"type":"command_execution","command":"git status"}}',
       '{"type":"item.completed","item":{"type":"command_execution","command":"git status","aggregated_output":"clean\\n"}}',
+      '{"type":"item.completed","item":{"type":"error","message":"Skill descriptions were shortened to fit the skills context budget."}}',
       '{"type":"item.completed","item":{"type":"agent_message","text":"## Ready\\n\\n- Tests pass\\n- Tree is clean"}}',
     ].join("\n");
     const turns = parseChatTranscript(transcript, "Check the repository", false);
@@ -15,6 +16,7 @@ describe("parseChatTranscript", () => {
     expect(turns[1].activities.map((item) => item.title)).toContain("Ran git status");
     expect(turns[1].activities.filter((item) => item.kind === "command")).toHaveLength(1);
     expect(turns[1].activities.find((item) => item.kind === "command")?.detail).toBe("clean");
+    expect(turns[1].activities.find((item) => item.kind === "notice")?.title).toBe("Skill context compacted");
     expect(turns[1].markdown).not.toContain("git status");
   });
 

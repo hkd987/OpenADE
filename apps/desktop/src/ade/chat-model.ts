@@ -68,7 +68,8 @@ export function parseChatTranscript(
       finalMessage = String(item.text ?? "").trim();
     }
     if (type === "item.completed" && item?.type === "error") {
-      addActivity(assistant, "notice", "Agent notice", String(item.message ?? "Agent error"));
+      const message = String(item.message ?? "Agent error");
+      addActivity(assistant, "notice", noticeTitle(message), message);
     }
 
     if (type === "stream_event" && isRecord(event.event)) {
@@ -145,6 +146,13 @@ function commandTitle(command: string): string {
 function toolTitle(name: string): string {
   const readable = name.replace(/[_-]+/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
   return readable || "Used a tool";
+}
+
+function noticeTitle(message: string): string {
+  if (message.includes("codex_hooks") && message.includes("deprecated")) return "Codex configuration notice";
+  if (message.includes("Skill descriptions were shortened")) return "Skill context compacted";
+  const firstLine = message.replace(/[`*_]/g, "").split("\n")[0].trim();
+  return firstLine.length > 68 ? `${firstLine.slice(0, 65)}…` : firstLine || "Agent notice";
 }
 
 function compactDetail(value: string): string | undefined {
