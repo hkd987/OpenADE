@@ -86,4 +86,3 @@ export function TerminalPanel({ session }: { session: Session }) {
 
   return <div className="terminal-host" ref={hostRef} aria-label="Session terminal" />;
 }
-

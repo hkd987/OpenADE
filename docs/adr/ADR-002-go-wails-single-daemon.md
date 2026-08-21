@@ -1,7 +1,7 @@
 # ADR-002: Go/Wails shell with one durable local daemon
 
-**Status:** Accepted  
-**Date:** 2026-08-20  
+**Status:** Accepted
+**Date:** 2026-08-20
 **Supersedes:** ADR-001 for the active desktop implementation
 
 ## Context

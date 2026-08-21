@@ -189,4 +189,3 @@ export function relativeTime(value: string): string {
   if (hours < 24) return `${hours}h`;
   return `${Math.floor(hours / 24)}d`;
 }
-
