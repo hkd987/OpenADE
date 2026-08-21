@@ -54,9 +54,9 @@ describe("Tembo-inspired application shell", () => {
   it("moves from navigation into reusable agent templates", async () => {
     const user = userEvent.setup();
     render(<AppShell />);
-    await user.click(screen.getByRole("button", { name: "Agents" }));
+    await user.click(screen.getByRole("button", { name: "Workflows" }));
     expect(
-      screen.getByRole("heading", { name: "Agent templates" }),
+      screen.getByRole("heading", { name: "Workflows" }),
     ).toBeInTheDocument();
     expect(screen.getByText("Implement a Jira ticket")).toBeInTheDocument();
     expect(screen.getByText("Fix failing CI")).toBeInTheDocument();
@@ -65,7 +65,7 @@ describe("Tembo-inspired application shell", () => {
   it("persists a desktop theme from settings", async () => {
     const user = userEvent.setup();
     const { container } = render(<AppShell />);
-    await user.click(screen.getByRole("button", { name: "Settings" }));
+    await user.click(screen.getByRole("button", { name: "Open settings" }));
     expect(screen.getByRole("heading", { name: "Settings" })).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /Dusk/ }));
     expect(container.querySelector(".ade")).toHaveClass("theme-dusk");

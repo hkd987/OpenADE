@@ -95,8 +95,7 @@ function AppShell() {
     const onKey = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
         event.preventDefault();
-        setPage("home");
-        window.setTimeout(() => document.querySelector<HTMLTextAreaElement>("[data-main-composer]")?.focus(), 0);
+        openComposer();
       }
     };
     window.addEventListener("keydown", onKey);
@@ -116,10 +115,15 @@ function AppShell() {
     setPage(next);
     setSelectedId(null);
   };
+  const openComposer = () => {
+    setPage("home");
+    setSelectedId(null);
+    window.setTimeout(() => document.querySelector<HTMLTextAreaElement>("[data-main-composer]")?.focus(), 0);
+  };
 
   return (
     <div className={`ade ${themeClass(preferences.theme)} ${sidebarOpen ? "" : "sidebar-collapsed"}`}>
-      <Sidebar page={page} sessions={sessions} projects={projects} selectedId={selectedId} connected={connected} onPage={openPage} onOpen={openSession} />
+      <Sidebar page={page} sessions={sessions} projects={projects} selectedId={selectedId} connected={connected} onPage={openPage} onOpen={openSession} onNewSession={openComposer} onToggle={() => setSidebarOpen(false)} />
 
       <main className="main-shell">
         <button className="sidebar-toggle icon-button" onClick={() => setSidebarOpen((value) => !value)} aria-label="Toggle sidebar"><SidebarSimple size={18} /></button>
@@ -185,6 +189,7 @@ function Home({ sessions, projects, meta, preferences, onCreated, onOpen, onErro
   };
 
   const active = sessions.filter((item) => ["starting", "running", "waiting"].includes(item.status));
+  const visibleSessions = active.length ? active.slice(0, 3) : sessions.slice(0, 3);
   return <div className="home-page">
     <div className="home-topline"><span className="eyebrow">Local agent workspace</span><span className="shortcut"><Command size={12} /> K to focus</span></div>
     <section className="home-hero">
@@ -211,14 +216,14 @@ function Home({ sessions, projects, meta, preferences, onCreated, onOpen, onErro
       <div className="trust-row"><span><Check /> Local-only transcripts</span><span><GitBranch /> Worktree isolated</span><span><TerminalWindow /> Bring your own CLI auth</span></div>
     </section>
     <section className="active-section">
-      <div className="section-heading"><div><h2>Active sessions</h2><p>Agents currently running or waiting for you</p></div><span>{active.length} live</span></div>
-      {active.length ? <div className="active-grid">{active.slice(0, 3).map((session) => <SessionCard key={session.id} session={session} onOpen={() => onOpen(session.id)} />)}</div> : <div className="quiet-empty"><div className="orbit"><span /><span /><span /></div><strong>No agents are running</strong><p>Launch a task above; it will keep working if you close this window.</p></div>}
+      <div className="section-heading"><div><h2>{active.length ? "Active sessions" : "Recent work"}</h2><p>{active.length ? "Agents currently running or waiting for you" : "Continue a session without searching for it"}</p></div><span>{active.length ? `${active.length} live` : "Up to date"}</span></div>
+      {visibleSessions.length ? <div className="active-grid">{visibleSessions.map((session) => <SessionCard key={session.id} session={session} onOpen={() => onOpen(session.id)} />)}</div> : <div className="quiet-empty"><strong>No sessions yet</strong><p>Describe a task above to create the first isolated worktree.</p></div>}
     </section>
   </div>;
 }
 
 function SessionCard({ session, onOpen }: { session: Session; onOpen: () => void }) {
-  return <button className="session-card" onClick={onOpen}><div className="card-top"><span className={`status-dot ${session.status}`} /><span className="agent-label">{session.agent}</span><DotsThree /></div><strong>{session.title}</strong><p>{projectName(session.repo_root)} · {session.branch}</p><div className="card-bottom">{session.ticket_key ? <span className="ticket-chip"><TicketIcon />{session.ticket_key}</span> : <span />}<small>{relativeTime(session.updated_at)}</small></div></button>;
+  return <button className="session-card" onClick={onOpen}><div className="card-top"><span className={`status-dot ${session.status}`} /><span className="agent-label">{agentLabel(session.agent)}</span><DotsThree /></div><strong>{session.title}</strong><p>{projectName(session.repo_root)}</p><div className="card-bottom">{session.ticket_key ? <span className="ticket-chip"><TicketIcon />{session.ticket_key}</span> : <span />}<small>{relativeTime(session.updated_at)}</small></div></button>;
 }
 
 function SessionsPage({ sessions, onOpen }: { sessions: Session[]; onOpen: (id: string) => void }) {
@@ -236,7 +241,11 @@ function AgentsPage({ onUse }: { onUse: (prompt: string) => void }) {
   const [category, setCategory] = useState("All");
   const categories = ["All", ...new Set(templates.map((item) => item.category))];
   const filtered = templates.filter((item) => (category === "All" || item.category === category) && `${item.title} ${item.prompt}`.toLowerCase().includes(query.toLowerCase()));
-  return <div className="agents-page"><div className="agents-hero"><div><span className="eyebrow">Reusable workflows</span><h1>Agent templates</h1><p>Start with a focused operating contract, then choose the repository and ticket.</p></div><div className="agent-constellation"><span><Robot /></span><i /><span><GithubLogo /></span><i /><span><TicketIcon /></span></div></div><label className="template-search"><ListMagnifyingGlass /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Describe what you need…" /></label><div className="filter-chips">{categories.map((item) => <button className={category === item ? "active" : ""} onClick={() => setCategory(item)} key={item}>{item}</button>)}</div><div className="template-grid">{filtered.map((template) => { const Icon = template.icon; return <button key={template.title} className="template-card" onClick={() => onUse(template.prompt)}><div className="template-icon"><Icon /></div><strong>{template.title}</strong><p>{template.prompt}</p><span>Use template <ArrowUp /></span></button>; })}</div></div>;
+  return <div className="agents-page"><div className="agents-hero"><div><span className="eyebrow">Reusable instructions</span><h1>Workflows</h1><p>Start from a focused brief, then choose the repository and linked work item.</p></div><div className="agent-constellation"><span><Robot /></span><i /><span><GithubLogo /></span><i /><span><TicketIcon /></span></div></div><label className="template-search"><ListMagnifyingGlass /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Find a workflow" /></label><div className="filter-chips">{categories.map((item) => <button className={category === item ? "active" : ""} onClick={() => setCategory(item)} key={item}>{item}</button>)}</div><div className="template-grid">{filtered.map((template) => { const Icon = template.icon; return <button key={template.title} className="template-card" onClick={() => onUse(template.prompt)}><div className="template-icon"><Icon /></div><strong>{template.title}</strong><p>{template.prompt}</p><span>Start with this workflow <ArrowUp /></span></button>; })}</div></div>;
+}
+
+function agentLabel(agent: string): string {
+  return ({ claude: "Claude Code", codex: "Codex CLI", copilot: "Copilot", opencode: "OpenCode", shell: "Local shell" } as Record<string, string>)[agent] ?? agent;
 }
 
 function ReviewPage({ projects, sessions }: { projects: string[]; sessions: Session[] }) {
