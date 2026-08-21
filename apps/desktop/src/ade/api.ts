@@ -129,6 +129,14 @@ export async function listProjects(): Promise<string[]> {
   return payload.projects ?? [];
 }
 
+export async function scanProjects(root: string): Promise<string[]> {
+  const payload = await request<{ projects: string[] }>("/api/projects/scan", {
+    method: "POST",
+    body: JSON.stringify({ root }),
+  });
+  return payload.projects ?? [];
+}
+
 export const createSession = (input: CreateSessionInput) =>
   request<Session>("/api/sessions", {
     method: "POST",

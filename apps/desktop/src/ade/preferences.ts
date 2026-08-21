@@ -7,6 +7,7 @@ export interface Preferences {
   default_agent: string;
   session_surface: SessionSurface;
   activity_detail: ActivityDetail;
+  project_root: string;
 }
 
 export const defaultPreferences: Preferences = {
@@ -14,6 +15,7 @@ export const defaultPreferences: Preferences = {
   default_agent: "claude",
   session_surface: "chat",
   activity_detail: "compact",
+  project_root: "",
 };
 
 export function loadPreferences(): Preferences {

@@ -27,6 +27,7 @@ import {
   listProjects,
   listPullRequests,
   listSessions,
+  scanProjects,
   Meta,
   projectName,
   PullRequest,
@@ -59,6 +60,7 @@ function AppShell() {
   const [page, setPage] = useState<Page>("home");
   const [sessions, setSessions] = useState<Session[]>([]);
   const [projects, setProjects] = useState<string[]>([]);
+  const [scannedProjects, setScannedProjects] = useState<string[]>([]);
   const [meta, setMeta] = useState<Meta | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -91,6 +93,16 @@ function AppShell() {
   }, [refresh]);
 
   useEffect(() => {
+    if (!preferences.project_root.trim()) {
+      setScannedProjects([]);
+      return;
+    }
+    void scanProjects(preferences.project_root)
+      .then(setScannedProjects)
+      .catch((reason) => setError(reason instanceof Error ? reason.message : String(reason)));
+  }, [preferences.project_root]);
+
+  useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
         event.preventDefault();
@@ -102,6 +114,7 @@ function AppShell() {
   }, []);
 
   const selected = sessions.find((session) => session.id === selectedId) ?? null;
+  const visibleProjects = [...new Set([...scannedProjects, ...projects])];
   const openSession = (id: string) => {
     setSelectedId(id);
     setPage("sessions");
@@ -122,7 +135,7 @@ function AppShell() {
 
   return (
     <div className={`ade ${themeClass(preferences.theme)} ${sidebarOpen ? "" : "sidebar-collapsed"}`}>
-      <Sidebar page={page} sessions={sessions} projects={projects} selectedId={selectedId} connected={connected} onPage={openPage} onOpen={openSession} onNewSession={openComposer} onToggle={() => setSidebarOpen(false)} />
+      <Sidebar page={page} sessions={sessions} projects={visibleProjects} selectedId={selectedId} connected={connected} onPage={openPage} onOpen={openSession} onNewSession={openComposer} onToggle={() => setSidebarOpen(false)} />
 
       <main className="main-shell">
         <button className="sidebar-toggle icon-button" onClick={() => setSidebarOpen((value) => !value)} aria-label="Toggle sidebar"><SidebarSimple size={18} /></button>
@@ -131,13 +144,13 @@ function AppShell() {
         {selected ? (
           <SessionWorkspace session={selected} preferences={preferences} onBack={() => setSelectedId(null)} onRefresh={refresh} />
         ) : page === "home" ? (
-          <Home sessions={sessions} projects={projects} meta={meta} preferences={preferences} onCreated={(session) => { void refresh(); openSession(session.id); }} onOpen={openSession} onError={setError} />
+          <Home sessions={sessions} projects={visibleProjects} meta={meta} preferences={preferences} onCreated={(session) => { void refresh(); openSession(session.id); }} onOpen={openSession} onError={setError} />
         ) : page === "sessions" ? (
           <SessionsPage sessions={sessions} onOpen={openSession} />
         ) : page === "agents" ? (
           <AgentsPage onUse={(prompt) => { sessionStorage.setItem("openade-template", prompt); setPage("home"); }} />
         ) : page === "review" ? (
-          <ReviewPage projects={projects} sessions={sessions} />
+          <ReviewPage projects={visibleProjects} sessions={sessions} />
         ) : (
           <SettingsPage preferences={preferences} onChange={updatePreferences} />
         )}
