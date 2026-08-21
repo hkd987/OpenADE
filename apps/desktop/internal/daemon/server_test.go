@@ -1,0 +1,84 @@
+package daemon
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+)
+
+func TestSessionAPIUsesTicketBranchAndStreamsPTY(t *testing.T) {
+	repo := createFixtureRepository(t)
+	dataDir := t.TempDir()
+	d, err := New(Config{DataDir: dataDir, Addr: "127.0.0.1:0"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.store.Close()
+	t.Setenv("SHELL", "/bin/sh")
+
+	body, _ := json.Marshal(CreateSessionRequest{Title: "Validate stream", Prompt: "printf 'PTY_OK\\n'",
+		Agent: "shell", RepoRoot: repo, BaseBranch: "main", TicketKey: "ADE-101"})
+	request := httptest.NewRequest(http.MethodPost, "/api/sessions", bytes.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	d.routes().ServeHTTP(response, request)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("create status=%d body=%s", response.Code, response.Body.String())
+	}
+	var session Session
+	if err := json.Unmarshal(response.Body.Bytes(), &session); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(session.Branch, "ade-101/") {
+		t.Fatalf("branch %q does not include ticket", session.Branch)
+	}
+	deadline := time.Now().Add(4 * time.Second)
+	for time.Now().Before(deadline) {
+		transcript, err := os.ReadFile(filepath.Join(dataDir, "transcripts", session.ID+".log"))
+		if err == nil && strings.Contains(string(transcript), "PTY_OK") {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	transcript, err := os.ReadFile(filepath.Join(dataDir, "transcripts", session.ID+".log"))
+	if err != nil || !strings.Contains(string(transcript), "PTY_OK") {
+		t.Fatalf("transcript missing PTY_OK: %v %q", err, transcript)
+	}
+	_ = d.sessions.Stop(session.ID)
+}
+
+func TestMakeBranchSanitizesInput(t *testing.T) {
+	branch := makeBranch("DEV-9", "Fix spaces & checkout!!!", "12345678-abcd")
+	if branch != "dev-9/fix-spaces-checkout-12345678" {
+		t.Fatalf("branch = %q", branch)
+	}
+}
+
+func createFixtureRepository(t *testing.T) string {
+	t.Helper()
+	repo := t.TempDir()
+	run := func(args ...string) {
+		t.Helper()
+		cmd := exec.CommandContext(context.Background(), "git", append([]string{"-C", repo}, args...)...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, out)
+		}
+	}
+	run("init", "-b", "main")
+	run("config", "user.name", "OpenADE Test")
+	run("config", "user.email", "openade@example.invalid")
+	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("# fixture\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run("add", "README.md")
+	run("commit", "-m", "initialize fixture")
+	return repo
+}

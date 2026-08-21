@@ -101,7 +101,11 @@ type PullRequest struct {
 }
 
 func listPullRequests(ctx context.Context, repo string) ([]PullRequest, error) {
-	cmd := exec.CommandContext(ctx, "gh", "pr", "list", "--repo", repo, "--state", "open", "--limit", "100",
+	slug, err := githubRepoSlug(ctx, repo)
+	if err != nil {
+		return nil, err
+	}
+	cmd := exec.CommandContext(ctx, "gh", "pr", "list", "--repo", slug, "--state", "open", "--limit", "100",
 		"--json", "number,title,url,state,isDraft,headRefName,baseRefName,reviewDecision,updatedAt,author,labels")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -127,7 +131,11 @@ func createPullRequest(ctx context.Context, session Session, title, body, base s
 	if _, err := gitOutput(ctx, session.WorktreePath, "push", "-u", "origin", session.Branch); err != nil {
 		return "", err
 	}
-	cmd := exec.CommandContext(ctx, "gh", "pr", "create", "--repo", session.RepoRoot, "--draft",
+	slug, err := githubRepoSlug(ctx, session.RepoRoot)
+	if err != nil {
+		return "", err
+	}
+	cmd := exec.CommandContext(ctx, "gh", "pr", "create", "--repo", slug, "--draft",
 		"--base", base, "--head", session.Branch, "--title", title, "--body", body)
 	cmd.Dir = session.WorktreePath
 	out, err := cmd.CombinedOutput()
@@ -135,6 +143,23 @@ func createPullRequest(ctx context.Context, session Session, title, body, base s
 		return "", fmt.Errorf("gh pr create: %s", strings.TrimSpace(string(out)))
 	}
 	return strings.TrimSpace(string(out)), nil
+}
+
+func githubRepoSlug(ctx context.Context, repo string) (string, error) {
+	if !strings.Contains(repo, string(filepath.Separator)) {
+		return strings.TrimSuffix(repo, ".git"), nil
+	}
+	cmd := exec.CommandContext(ctx, "gh", "repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner")
+	cmd.Dir = repo
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("resolve GitHub repository: %s", strings.TrimSpace(string(out)))
+	}
+	slug := strings.TrimSpace(string(out))
+	if slug == "" {
+		return "", fmt.Errorf("repository has no GitHub origin")
+	}
+	return slug, nil
 }
 
 type Ticket struct {

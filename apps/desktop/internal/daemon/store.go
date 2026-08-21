@@ -135,6 +135,23 @@ FROM sessions WHERE id=?`, id)
 	return scanSession(row)
 }
 
+func (s *Store) ListProjects() ([]string, error) {
+	rows, err := s.db.Query(`SELECT repo_root FROM sessions GROUP BY repo_root ORDER BY MAX(updated_at) DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	projects := []string{}
+	for rows.Next() {
+		var project string
+		if err := rows.Scan(&project); err != nil {
+			return nil, err
+		}
+		projects = append(projects, project)
+	}
+	return projects, rows.Err()
+}
+
 type scanner interface{ Scan(...any) error }
 
 func scanSession(row scanner) (Session, error) {

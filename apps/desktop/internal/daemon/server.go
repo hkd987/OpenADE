@@ -91,6 +91,7 @@ func (d *Daemon) routes() http.Handler {
 	mux.HandleFunc("GET /api/meta", d.handleMeta)
 	mux.HandleFunc("GET /api/sessions", d.handleListSessions)
 	mux.HandleFunc("POST /api/sessions", d.handleCreateSession)
+	mux.HandleFunc("GET /api/projects", d.handleProjects)
 	mux.HandleFunc("GET /api/sessions/{id}", d.handleGetSession)
 	mux.HandleFunc("GET /api/sessions/{id}/stream", d.handleStream)
 	mux.HandleFunc("POST /api/sessions/{id}/input", d.handleInput)
@@ -102,6 +103,15 @@ func (d *Daemon) routes() http.Handler {
 	mux.HandleFunc("POST /api/github/pull-requests", d.handleCreatePullRequest)
 	mux.HandleFunc("GET /api/jira/tickets/{key}", d.handleJiraTicket)
 	return cors(mux)
+}
+
+func (d *Daemon) handleProjects(w http.ResponseWriter, _ *http.Request) {
+	projects, err := d.store.ListProjects()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"projects": projects})
 }
 
 func cors(next http.Handler) http.Handler {
