@@ -55,6 +55,71 @@ func TestSessionAPIUsesTicketBranchAndStreamsPTY(t *testing.T) {
 	_ = d.sessions.Stop(session.ID)
 }
 
+func TestProjectTerminalsAreIndependentAndIndexed(t *testing.T) {
+	repo := createFixtureRepository(t)
+	d, err := New(Config{DataDir: t.TempDir(), Addr: "127.0.0.1:0"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.store.Close()
+	t.Setenv("SHELL", "/bin/sh")
+
+	sessionBody, _ := json.Marshal(CreateSessionRequest{
+		Title: "Terminal fixture", Prompt: "printf 'AGENT_ONLY\\n'", Agent: "shell", RepoRoot: repo, BaseBranch: "main",
+	})
+	createSessionRequest := httptest.NewRequest(http.MethodPost, "/api/sessions", bytes.NewReader(sessionBody))
+	createSessionResponse := httptest.NewRecorder()
+	d.routes().ServeHTTP(createSessionResponse, createSessionRequest)
+	if createSessionResponse.Code != http.StatusCreated {
+		t.Fatalf("create session status=%d body=%s", createSessionResponse.Code, createSessionResponse.Body.String())
+	}
+	var session Session
+	if err := json.Unmarshal(createSessionResponse.Body.Bytes(), &session); err != nil {
+		t.Fatal(err)
+	}
+
+	createTerminalRequest := httptest.NewRequest(http.MethodPost, "/api/sessions/"+session.ID+"/terminals", strings.NewReader(`{"title":"Build"}`))
+	createTerminalResponse := httptest.NewRecorder()
+	d.routes().ServeHTTP(createTerminalResponse, createTerminalRequest)
+	if createTerminalResponse.Code != http.StatusCreated {
+		t.Fatalf("create terminal status=%d body=%s", createTerminalResponse.Code, createTerminalResponse.Body.String())
+	}
+	var terminal TerminalSession
+	if err := json.Unmarshal(createTerminalResponse.Body.Bytes(), &terminal); err != nil {
+		t.Fatal(err)
+	}
+	if terminal.SessionID != session.ID || terminal.Cwd != session.WorktreePath || terminal.Title != "Build" {
+		t.Fatalf("terminal not scoped to session worktree: %+v", terminal)
+	}
+
+	inputBody, _ := json.Marshal(map[string]string{"data": "printf 'TERMINAL_ONLY\\n'\n"})
+	inputRequest := httptest.NewRequest(http.MethodPost, "/api/terminals/"+terminal.ID+"/input", bytes.NewReader(inputBody))
+	inputResponse := httptest.NewRecorder()
+	d.routes().ServeHTTP(inputResponse, inputRequest)
+	if inputResponse.Code != http.StatusNoContent {
+		t.Fatalf("terminal input status=%d body=%s", inputResponse.Code, inputResponse.Body.String())
+	}
+
+	deadline := time.Now().Add(3 * time.Second)
+	var transcript []byte
+	for time.Now().Before(deadline) {
+		transcript, _ = os.ReadFile(filepath.Join(d.config.DataDir, "terminal-transcripts", terminal.ID+".log"))
+		if strings.Contains(string(transcript), "TERMINAL_ONLY") {
+			break
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	if !strings.Contains(string(transcript), "TERMINAL_ONLY") || strings.Contains(string(transcript), "AGENT_ONLY") {
+		t.Fatalf("terminal stream is not independent: %q", transcript)
+	}
+	indexed, err := d.store.ListTerminals(session.ID)
+	if err != nil || len(indexed) != 1 || indexed[0].ID != terminal.ID {
+		t.Fatalf("indexed terminals = %+v, err=%v", indexed, err)
+	}
+	_ = d.terminals.Stop(terminal.ID)
+	_ = d.sessions.Stop(session.ID)
+}
+
 func TestMakeBranchSanitizesInput(t *testing.T) {
 	branch := makeBranch("DEV-9", "Fix spaces & checkout!!!", "12345678-abcd")
 	if branch != "dev-9/fix-spaces-checkout-12345678" {

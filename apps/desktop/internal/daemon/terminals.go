@@ -1,0 +1,203 @@
+package daemon
+
+import (
+	"bufio"
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"sync"
+	"syscall"
+	"time"
+
+	"github.com/creack/pty"
+	"github.com/google/uuid"
+)
+
+type TerminalManager struct {
+	store    *Store
+	dataDir  string
+	mu       sync.RWMutex
+	live     map[string]*liveSession
+	stopping map[string]bool
+}
+
+func NewTerminalManager(store *Store, dataDir string) *TerminalManager {
+	return &TerminalManager{
+		store: store, dataDir: dataDir,
+		live: make(map[string]*liveSession), stopping: make(map[string]bool),
+	}
+}
+
+func (m *TerminalManager) Create(session Session, title string) (TerminalSession, error) {
+	terminals, err := m.store.ListTerminals(session.ID)
+	if err != nil {
+		return TerminalSession{}, err
+	}
+	if title == "" {
+		title = fmt.Sprintf("Terminal %d", len(terminals)+1)
+	}
+	shell := os.Getenv("SHELL")
+	if shell == "" {
+		shell = "/bin/zsh"
+	}
+	cmd := exec.Command(shell, "-l")
+	cmd.Dir = session.WorktreePath
+	cmd.Env = append(os.Environ(), "TERM=xterm-256color", "COLORTERM=truecolor", "OPENADE_SESSION_ID="+session.ID)
+	ptmx, err := pty.StartWithSize(cmd, &pty.Winsize{Rows: 32, Cols: 100})
+	if err != nil {
+		return TerminalSession{}, fmt.Errorf("start project terminal: %w", err)
+	}
+	now := time.Now().UTC()
+	terminal := TerminalSession{
+		ID: uuid.NewString(), SessionID: session.ID, Title: title, Cwd: session.WorktreePath,
+		Status: "running", PID: cmd.Process.Pid, CreatedAt: now, UpdatedAt: now,
+	}
+	if err := m.store.CreateTerminal(terminal); err != nil {
+		_ = ptmx.Close()
+		_ = cmd.Process.Kill()
+		return TerminalSession{}, err
+	}
+	live := &liveSession{pty: ptmx, cmd: cmd, subscribers: make(map[chan []byte]struct{})}
+	m.mu.Lock()
+	m.live[terminal.ID] = live
+	m.mu.Unlock()
+	transcriptDir := filepath.Join(m.dataDir, "terminal-transcripts")
+	_ = os.MkdirAll(transcriptDir, 0o755)
+	transcript, _ := os.OpenFile(filepath.Join(transcriptDir, terminal.ID+".log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	go m.readOutput(terminal.ID, live, transcript)
+	go m.wait(terminal.ID, live, transcript)
+	return terminal, nil
+}
+
+func (m *TerminalManager) readOutput(id string, live *liveSession, transcript *os.File) {
+	reader := bufio.NewReaderSize(live.pty, 32*1024)
+	buf := make([]byte, 8192)
+	for {
+		n, err := reader.Read(buf)
+		if n > 0 {
+			chunk := append([]byte(nil), buf[:n]...)
+			if transcript != nil {
+				_, _ = transcript.Write(chunk)
+			}
+			live.mu.Lock()
+			live.scrollback = append(live.scrollback, chunk...)
+			if len(live.scrollback) > maxScrollback {
+				live.scrollback = live.scrollback[len(live.scrollback)-maxScrollback:]
+			}
+			for subscriber := range live.subscribers {
+				select {
+				case subscriber <- chunk:
+				default:
+				}
+			}
+			live.mu.Unlock()
+		}
+		if err != nil {
+			return
+		}
+	}
+}
+
+func (m *TerminalManager) wait(id string, live *liveSession, transcript *os.File) {
+	err := live.cmd.Wait()
+	code := 0
+	status := "completed"
+	m.mu.Lock()
+	if m.stopping[id] {
+		status = "stopped"
+		delete(m.stopping, id)
+	} else if err != nil {
+		status = "failed"
+	}
+	delete(m.live, id)
+	m.mu.Unlock()
+	if exitErr, ok := err.(*exec.ExitError); ok {
+		code = exitErr.ExitCode()
+	} else if err != nil {
+		code = 1
+	}
+	_ = m.store.UpdateTerminalRuntime(id, status, 0, &code)
+	if transcript != nil {
+		_ = transcript.Close()
+	}
+	live.mu.Lock()
+	for subscriber := range live.subscribers {
+		close(subscriber)
+	}
+	live.subscribers = make(map[chan []byte]struct{})
+	live.mu.Unlock()
+}
+
+func (m *TerminalManager) Write(id, data string) error {
+	live, err := m.getLive(id)
+	if err != nil {
+		return err
+	}
+	_, err = io.WriteString(live.pty, data)
+	return err
+}
+
+func (m *TerminalManager) Resize(id string, rows, cols uint16) error {
+	live, err := m.getLive(id)
+	if err != nil {
+		return err
+	}
+	return pty.Setsize(live.pty, &pty.Winsize{Rows: rows, Cols: cols})
+}
+
+func (m *TerminalManager) Stop(id string) error {
+	live, err := m.getLive(id)
+	if err != nil {
+		terminal, storeErr := m.store.GetTerminal(id)
+		if storeErr == nil && terminal.Status != "running" {
+			return nil
+		}
+		return err
+	}
+	m.mu.Lock()
+	m.stopping[id] = true
+	m.mu.Unlock()
+	if live.cmd.Process == nil {
+		return nil
+	}
+	return live.cmd.Process.Signal(syscall.SIGTERM)
+}
+
+func (m *TerminalManager) Subscribe(id string) ([]byte, <-chan []byte, func(), error) {
+	live, err := m.getLive(id)
+	if err != nil {
+		if _, storeErr := m.store.GetTerminal(id); storeErr != nil {
+			return nil, nil, nil, storeErr
+		}
+		transcript, _ := os.ReadFile(filepath.Join(m.dataDir, "terminal-transcripts", id+".log"))
+		closed := make(chan []byte)
+		close(closed)
+		return transcript, closed, func() {}, nil
+	}
+	ch := make(chan []byte, 128)
+	live.mu.Lock()
+	initial := append([]byte(nil), live.scrollback...)
+	live.subscribers[ch] = struct{}{}
+	live.mu.Unlock()
+	cancel := func() {
+		live.mu.Lock()
+		if _, ok := live.subscribers[ch]; ok {
+			delete(live.subscribers, ch)
+			close(ch)
+		}
+		live.mu.Unlock()
+	}
+	return initial, ch, cancel, nil
+}
+
+func (m *TerminalManager) getLive(id string) (*liveSession, error) {
+	m.mu.RLock()
+	live := m.live[id]
+	m.mu.RUnlock()
+	if live == nil {
+		return nil, fmt.Errorf("terminal %s is not running", id)
+	}
+	return live, nil
+}

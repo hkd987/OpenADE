@@ -30,6 +30,19 @@ type Session struct {
 	FinishedAt   *time.Time `json:"finished_at,omitempty"`
 }
 
+type TerminalSession struct {
+	ID         string     `json:"id"`
+	SessionID  string     `json:"session_id"`
+	Title      string     `json:"title"`
+	Cwd        string     `json:"cwd"`
+	Status     string     `json:"status"`
+	PID        int        `json:"pid,omitempty"`
+	ExitCode   *int       `json:"exit_code,omitempty"`
+	CreatedAt  time.Time  `json:"created_at"`
+	UpdatedAt  time.Time  `json:"updated_at"`
+	FinishedAt *time.Time `json:"finished_at,omitempty"`
+}
+
 type Store struct {
 	db *sql.DB
 }
@@ -75,12 +88,29 @@ CREATE TABLE IF NOT EXISTS sessions (
 CREATE INDEX IF NOT EXISTS sessions_updated_idx ON sessions(updated_at DESC);
 CREATE INDEX IF NOT EXISTS sessions_repo_idx ON sessions(repo_root, updated_at DESC);
 CREATE INDEX IF NOT EXISTS sessions_ticket_idx ON sessions(ticket_key) WHERE ticket_key <> '';
+CREATE TABLE IF NOT EXISTS terminals (
+  id TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  title TEXT NOT NULL,
+  cwd TEXT NOT NULL,
+  status TEXT NOT NULL,
+  pid INTEGER NOT NULL DEFAULT 0,
+  exit_code INTEGER,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  finished_at TEXT
+);
+CREATE INDEX IF NOT EXISTS terminals_session_idx ON terminals(session_id, created_at);
 `)
 	if err != nil {
 		return fmt.Errorf("migrate sqlite: %w", err)
 	}
 	_, err = s.db.Exec(`UPDATE sessions SET status = 'interrupted', pid = 0,
 updated_at = ? WHERE status IN ('starting', 'running', 'waiting')`, time.Now().UTC().Format(time.RFC3339Nano))
+	if err == nil {
+		_, err = s.db.Exec(`UPDATE terminals SET status = 'interrupted', pid = 0,
+updated_at = ? WHERE status IN ('starting', 'running')`, time.Now().UTC().Format(time.RFC3339Nano))
+	}
 	return err
 }
 
@@ -152,6 +182,49 @@ func (s *Store) ListProjects() ([]string, error) {
 	return projects, rows.Err()
 }
 
+func (s *Store) CreateTerminal(terminal TerminalSession) error {
+	_, err := s.db.Exec(`INSERT INTO terminals
+(id,session_id,title,cwd,status,pid,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)`,
+		terminal.ID, terminal.SessionID, terminal.Title, terminal.Cwd, terminal.Status,
+		terminal.PID, encodeTime(terminal.CreatedAt), encodeTime(terminal.UpdatedAt))
+	return err
+}
+
+func (s *Store) UpdateTerminalRuntime(id, status string, pid int, exitCode *int) error {
+	now := time.Now().UTC()
+	var finished any
+	if status == "completed" || status == "failed" || status == "stopped" {
+		finished = encodeTime(now)
+	}
+	_, err := s.db.Exec(`UPDATE terminals SET status=?, pid=?, exit_code=?, updated_at=?,
+finished_at=COALESCE(?, finished_at) WHERE id=?`, status, pid, exitCode, encodeTime(now), finished, id)
+	return err
+}
+
+func (s *Store) ListTerminals(sessionID string) ([]TerminalSession, error) {
+	rows, err := s.db.Query(`SELECT id,session_id,title,cwd,status,pid,exit_code,created_at,updated_at,finished_at
+FROM terminals WHERE session_id=? ORDER BY created_at`, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	terminals := []TerminalSession{}
+	for rows.Next() {
+		terminal, err := scanTerminal(rows)
+		if err != nil {
+			return nil, err
+		}
+		terminals = append(terminals, terminal)
+	}
+	return terminals, rows.Err()
+}
+
+func (s *Store) GetTerminal(id string) (TerminalSession, error) {
+	row := s.db.QueryRow(`SELECT id,session_id,title,cwd,status,pid,exit_code,created_at,updated_at,finished_at
+FROM terminals WHERE id=?`, id)
+	return scanTerminal(row)
+}
+
 type scanner interface{ Scan(...any) error }
 
 func scanSession(row scanner) (Session, error) {
@@ -176,6 +249,29 @@ func scanSession(row scanner) (Session, error) {
 		session.ExitCode = &code
 	}
 	return session, nil
+}
+
+func scanTerminal(row scanner) (TerminalSession, error) {
+	var terminal TerminalSession
+	var created, updated string
+	var finished sql.NullString
+	var exitCode sql.NullInt64
+	err := row.Scan(&terminal.ID, &terminal.SessionID, &terminal.Title, &terminal.Cwd, &terminal.Status,
+		&terminal.PID, &exitCode, &created, &updated, &finished)
+	if err != nil {
+		return terminal, err
+	}
+	terminal.CreatedAt, _ = time.Parse(time.RFC3339Nano, created)
+	terminal.UpdatedAt, _ = time.Parse(time.RFC3339Nano, updated)
+	if finished.Valid {
+		t, _ := time.Parse(time.RFC3339Nano, finished.String)
+		terminal.FinishedAt = &t
+	}
+	if exitCode.Valid {
+		code := int(exitCode.Int64)
+		terminal.ExitCode = &code
+	}
+	return terminal, nil
 }
 
 func encodeTime(t time.Time) string { return t.UTC().Format(time.RFC3339Nano) }

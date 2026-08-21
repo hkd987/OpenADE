@@ -21,10 +21,11 @@ type Config struct {
 }
 
 type Daemon struct {
-	config   Config
-	store    *Store
-	sessions *SessionManager
-	server   *http.Server
+	config    Config
+	store     *Store
+	sessions  *SessionManager
+	terminals *TerminalManager
+	server    *http.Server
 }
 
 func DefaultConfig() Config {
@@ -54,7 +55,11 @@ func New(config Config) (*Daemon, error) {
 	if err != nil {
 		return nil, err
 	}
-	d := &Daemon{config: config, store: store, sessions: NewSessionManager(store, config.DataDir)}
+	d := &Daemon{
+		config: config, store: store,
+		sessions:  NewSessionManager(store, config.DataDir),
+		terminals: NewTerminalManager(store, config.DataDir),
+	}
 	d.server = &http.Server{Addr: config.Addr, Handler: d.routes(), ReadHeaderTimeout: 5 * time.Second}
 	return d, nil
 }
@@ -98,6 +103,12 @@ func (d *Daemon) routes() http.Handler {
 	mux.HandleFunc("POST /api/sessions/{id}/stop", d.handleStop)
 	mux.HandleFunc("GET /api/sessions/{id}/diff", d.handleDiff)
 	mux.HandleFunc("GET /api/sessions/{id}/files", d.handleFiles)
+	mux.HandleFunc("GET /api/sessions/{id}/terminals", d.handleListTerminals)
+	mux.HandleFunc("POST /api/sessions/{id}/terminals", d.handleCreateTerminal)
+	mux.HandleFunc("GET /api/terminals/{id}/stream", d.handleTerminalStream)
+	mux.HandleFunc("POST /api/terminals/{id}/input", d.handleTerminalInput)
+	mux.HandleFunc("POST /api/terminals/{id}/resize", d.handleTerminalResize)
+	mux.HandleFunc("POST /api/terminals/{id}/stop", d.handleTerminalStop)
 	mux.HandleFunc("GET /api/github/pull-requests", d.handlePullRequests)
 	mux.HandleFunc("POST /api/github/pull-requests", d.handleCreatePullRequest)
 	mux.HandleFunc("GET /api/jira/tickets/{key}", d.handleJiraTicket)
