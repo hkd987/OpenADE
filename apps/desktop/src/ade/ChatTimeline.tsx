@@ -57,6 +57,7 @@ function AssistantTurn({
   activityExpanded: boolean;
 }) {
   const [copied, setCopied] = useState(false);
+  const visibleMarkdown = useProgressiveMarkdown(markdown, streaming);
   const copy = async () => {
     await navigator.clipboard.writeText(markdown);
     setCopied(true);
@@ -66,10 +67,10 @@ function AssistantTurn({
     <article className="chat-assistant-turn">
       <header><span className="agent-avatar"><Cpu weight="fill" /></span><strong>{agent}</strong></header>
       {activities.length > 0 && <ActivityGroup activities={activities} streaming={streaming} expanded={activityExpanded} />}
-      {markdown ? <MarkdownMessage>{markdown}</MarkdownMessage> : streaming ? (
+      {visibleMarkdown ? <MarkdownMessage>{visibleMarkdown}</MarkdownMessage> : streaming ? (
         <div className="native-thinking"><SpinnerGap className="spin" /> Working through the task…</div>
       ) : null}
-      {streaming && markdown && <span className="streaming-cursor" aria-label="Streaming" />}
+      {streaming && visibleMarkdown && <span className="streaming-cursor" aria-label="Streaming" />}
       {markdown && !streaming && (
         <div className="response-actions">
           <button type="button" onClick={() => void copy()}>{copied ? <Check /> : <Copy />}<span>{copied ? "Copied" : "Copy"}</span></button>
@@ -80,8 +81,8 @@ function AssistantTurn({
 }
 
 function ActivityGroup({ activities, streaming, expanded }: { activities: ChatActivity[]; streaming: boolean; expanded: boolean }) {
-  const [open, setOpen] = useState(streaming || expanded);
-  useEffect(() => setOpen(streaming || expanded), [expanded, streaming]);
+  const [open, setOpen] = useState(expanded);
+  useEffect(() => setOpen(expanded), [expanded]);
   return (
     <details className="activity-group" open={open} onToggle={(event) => setOpen(event.currentTarget.open)}>
       <summary>
@@ -99,6 +100,32 @@ function ActivityGroup({ activities, streaming, expanded }: { activities: ChatAc
       </div>
     </details>
   );
+}
+
+function useProgressiveMarkdown(markdown: string, streaming: boolean): string {
+  const [visible, setVisible] = useState(streaming ? "" : markdown);
+
+  useEffect(() => {
+    if (!streaming) {
+      setVisible(markdown);
+      return;
+    }
+    if (!markdown.startsWith(visible)) {
+      setVisible("");
+    }
+  }, [markdown, streaming, visible]);
+
+  useEffect(() => {
+    if (!streaming || visible.length >= markdown.length) return;
+    const remaining = markdown.length - visible.length;
+    const step = Math.max(2, Math.min(28, Math.ceil(remaining / 18)));
+    const timer = window.setTimeout(() => {
+      setVisible(markdown.slice(0, Math.min(markdown.length, visible.length + step)));
+    }, 18);
+    return () => window.clearTimeout(timer);
+  }, [markdown, streaming, visible]);
+
+  return visible;
 }
 
 function activityIcon(activity: ChatActivity) {

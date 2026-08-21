@@ -152,7 +152,7 @@ export function SessionWorkspace({ session, preferences, onBack, onRefresh }: { 
               }
             }}
           />
-          <div>
+          <div className="composer-footer">
             <span className="runtime-chip"><span className={`status-dot ${session.status}`} />{active ? `${agentLabel(session.agent)} is attached` : resumable ? "Conversation can continue" : `Run ${session.status}`}</span>
             <button className="send-button" disabled={!canMessage || !input.trim()} aria-label="Send message"><ArrowUp weight="bold" /></button>
           </div>
