@@ -5,6 +5,7 @@ const themes: { id: ThemePreference; name: string; description: string }[] = [
   { id: "graphite", name: "Graphite", description: "Neutral dark IDE palette" },
   { id: "dusk", name: "Dusk", description: "Warm desktop-chat palette" },
   { id: "paper", name: "Paper", description: "Soft light workspace" },
+  { id: "glass", name: "Glass", description: "Cool translucent workspace" },
   { id: "system", name: "System", description: "Follow macOS appearance" },
 ];
 

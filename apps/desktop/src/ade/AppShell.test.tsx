@@ -67,8 +67,8 @@ describe("Tembo-inspired application shell", () => {
     const { container } = render(<AppShell />);
     await user.click(screen.getByRole("button", { name: "Open settings" }));
     expect(screen.getByRole("heading", { name: "Settings" })).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: /Dusk/ }));
-    expect(container.querySelector(".ade")).toHaveClass("theme-dusk");
-    expect(JSON.parse(localStorage.getItem("openade.preferences") ?? "{}").theme).toBe("dusk");
+    await user.click(screen.getByRole("button", { name: /Glass/ }));
+    expect(container.querySelector(".ade")).toHaveClass("theme-glass");
+    expect(JSON.parse(localStorage.getItem("openade.preferences") ?? "{}").theme).toBe("glass");
   });
 });

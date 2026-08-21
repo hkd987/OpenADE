@@ -1,4 +1,4 @@
-export type ThemePreference = "graphite" | "dusk" | "paper" | "system";
+export type ThemePreference = "graphite" | "dusk" | "paper" | "glass" | "system";
 export type SessionSurface = "chat" | "terminal";
 export type ActivityDetail = "compact" | "expanded";
 
@@ -31,6 +31,7 @@ export function savePreferences(preferences: Preferences) {
 export function themeClass(theme: ThemePreference): string {
   if (theme === "paper") return "theme-light";
   if (theme === "dusk") return "theme-dusk";
+  if (theme === "glass") return "theme-glass";
   if (theme === "system") return "theme-system";
   return "theme-dark";
 }
