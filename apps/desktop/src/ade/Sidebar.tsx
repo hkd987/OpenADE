@@ -45,6 +45,7 @@ export function Sidebar({
 }) {
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set(projects.slice(0, 3)));
   const [showAll, setShowAll] = useState<Set<string>>(new Set());
+  const [showAllProjects, setShowAllProjects] = useState(false);
   const grouped = useMemo(() => {
     const roots = [...new Set([...projects, ...sessions.map((session) => session.repo_root), ...externalConversations.map((conversation) => conversation.project_root)])];
     return roots.map((root) => {
@@ -67,6 +68,7 @@ export function Sidebar({
     ...sessions.map((session) => ({ kind: "session" as const, updatedAt: session.updated_at, session })),
     ...externalConversations.map((conversation) => ({ kind: "external" as const, updatedAt: conversation.updated_at, conversation })),
   ].sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt)).slice(0, 7), [externalConversations, sessions]);
+  const visibleGroups = showAllProjects ? grouped : grouped.slice(0, 10);
 
   useEffect(() => {
     setExpanded((current) => current.size ? current : new Set(grouped.slice(0, 3).map((group) => group.root)));
@@ -91,7 +93,7 @@ export function Sidebar({
       <div className="sidebar-scroll">
         <div className="sidebar-section-title">Projects</div>
         <div className="project-groups">
-          {grouped.map(({ root, items }) => {
+          {visibleGroups.map(({ root, items }) => {
             const open = expanded.has(root);
             const visible = showAll.has(root) ? items : items.slice(0, 3);
             return <section className="project-group" key={root}>
@@ -104,6 +106,7 @@ export function Sidebar({
               </div>}
             </section>;
           })}
+          {grouped.length > 10 && <button className="all-projects-toggle" onClick={() => setShowAllProjects((value) => !value)}>{showAllProjects ? "Show fewer projects" : `Show ${grouped.length - 10} more projects`}</button>}
         </div>
 
         <div className="sidebar-section-title recent-title">Recents</div>
@@ -120,7 +123,7 @@ export function Sidebar({
 }
 
 function ExternalConversationButton({ conversation, busy, onOpen }: { conversation: ExternalConversation; busy: boolean; onOpen: (conversation: ExternalConversation) => void }) {
-  return <button className="external-session" onClick={() => onOpen(conversation)} disabled={busy} title={`Resume this ${providerLabel(conversation.provider)} conversation`}><TerminalWindow /> <span>{conversation.title}</span><small>{providerLabel(conversation.provider)}</small>{busy && <SpinnerGap className="spin" />}</button>;
+  return <button className="external-session" onClick={() => onOpen(conversation)} disabled={busy} title={`Resume this ${providerLabel(conversation.provider)} conversation`}><TerminalWindow /> <span>{conversation.title}</span><small>{providerLabel(conversation.provider)} · {relativeTime(conversation.updated_at)}</small>{busy && <SpinnerGap className="spin" />}</button>;
 }
 
 function providerLabel(provider: ExternalConversation["provider"]): string {

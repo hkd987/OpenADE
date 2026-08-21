@@ -53,6 +53,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .project-sessions > button.external-session > small { color:var(--muted-2); font-size:9px; }
 .project-sessions > button.external-session:disabled { cursor:progress; }
 .show-more { width:max-content; border:0; background:transparent; color:var(--muted-2); padding:5px 8px; font-size:10px; cursor:pointer; }.show-more:hover { color:var(--text); }
+.all-projects-toggle { width:calc(100% - 16px); margin:5px 8px 0; padding:7px 8px; border:0; border-radius:7px; background:transparent; color:var(--muted-2); font-size:10.5px; text-align:left; cursor:pointer; }
+.all-projects-toggle:hover { background:var(--surface); color:var(--text); }
 .recent-title { margin-top:18px; }
 .recents-heading { display:flex; align-items:center; justify-content:space-between; color:var(--muted); font-size:12px; margin:28px 8px 8px; }
 .recents-actions { display:flex; gap:10px; }
