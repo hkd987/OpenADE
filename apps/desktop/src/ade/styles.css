@@ -1,6 +1,6 @@
-@import url("https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap");
+@font-face { font-family:"OpenADE Inter"; src:url("./Inter.woff2") format("woff2"); font-weight:100 900; font-style:normal; font-display:swap; }
 
-:root { font-family: "DM Sans", Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #e7e8e9; background: #0e1012; font-synthesis: none; text-rendering: geometricPrecision; }
+:root { font-family: "OpenADE Inter", Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #e7e8e9; background: #0e1012; font-synthesis: none; text-rendering: geometricPrecision; }
 * { box-sizing: border-box; }
 body { margin: 0; min-width: 320px; min-height: 100vh; overflow: hidden; }
 button, input, textarea, select { font: inherit; }
@@ -240,4 +240,3 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 @media (max-width:900px) { .ade { grid-template-columns:0 1fr; }.sidebar { position:fixed; inset:0 auto 0 0; width:280px; transform:translateX(-100%); transition:transform .2s; box-shadow:18px 0 50px #0008; }.ade:not(.sidebar-collapsed) .sidebar { transform:translateX(0); }.sidebar-toggle { opacity:1; pointer-events:auto; }.session-workspace.with-panel { grid-template-columns:1fr; }.work-panel { position:absolute; inset:52px 0 0 18%; z-index:5; border-left:1px solid var(--line); box-shadow:-18px 0 40px #0006; }.active-grid,.template-grid { grid-template-columns:1fr 1fr; } }
 @media (max-width:620px) { .home-page,.list-page,.agents-page,.review-page { padding-inline:16px; }.home-hero { padding-top:54px; }.home-heading { align-items:flex-start; }.home-heading h1 { font-size:22px; }.composer-options { grid-template-columns:1fr; }.trust-row { display:none; }.active-grid,.template-grid,.review-metrics { grid-template-columns:1fr; }.table-head { display:none; }.table-row { grid-template-columns:1fr auto; gap:7px; padding:12px; }.table-row > span:nth-child(2),.table-row > span:nth-child(3) { grid-column:1; }.table-row > span:last-child { grid-column:2; grid-row:1; }.review-top { align-items:flex-start; gap:20px; flex-direction:column; }.work-panel { inset:52px 0 0 0; }.session-workspace.with-panel .conversation { visibility:hidden; }.agent-constellation { display:none; } }
 @media (prefers-reduced-motion:reduce) { *,*::before,*::after { animation-duration:.01ms !important; animation-iteration-count:1 !important; transition-duration:.01ms !important; scroll-behavior:auto !important; } }
-
