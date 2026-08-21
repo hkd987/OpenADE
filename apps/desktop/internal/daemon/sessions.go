@@ -137,7 +137,11 @@ func (m *SessionManager) writeProviderSessionMarker(session Session, providerID 
 		return err
 	}
 	defer file.Close()
-	_, err = file.Write(append(encoded, '\n'))
+	// PTY transcripts frequently end in an escape sequence rather than a
+	// newline. Frame the marker as its own JSONL record in either case.
+	record := append([]byte{'\n'}, encoded...)
+	record = append(record, '\n')
+	_, err = file.Write(record)
 	return err
 }
 
@@ -161,6 +165,15 @@ func tuiProviderCommand(session Session, providerID string) (string, []string, e
 }
 
 func (m *SessionManager) launch(session Session) error {
+	if session.Mode == "tui" && isClaudeAgent(session.Agent) {
+		// Claude's interactive output does not expose its provider session ID.
+		// Give every new direct TUI a stable ID up front so chat/TUI switches can
+		// resume the same conversation instead of relying on cwd-sensitive
+		// --continue behavior.
+		if err := m.writeProviderSessionMarker(session, session.ID); err != nil {
+			return err
+		}
+	}
 	program, args, err := agentCommand(session)
 	if err != nil {
 		return err
@@ -206,6 +219,12 @@ func (m *SessionManager) Resume(session Session, prompt string) error {
 		return fmt.Errorf("read session transcript: %w", err)
 	}
 	providerID := providerSessionID(transcript, session.Agent)
+	if providerID == "" && isClaudeAgent(session.Agent) {
+		providerID = session.ID
+		if err := m.writeProviderSessionMarker(session, providerID); err != nil {
+			return err
+		}
+	}
 	marker, _ := json.Marshal(map[string]string{"type": "openade.user_message", "text": prompt})
 	file, err := os.OpenFile(transcriptPath, os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
@@ -221,6 +240,8 @@ func (m *SessionManager) Resume(session Session, prompt string) error {
 	var args []string
 	if providerID == "" {
 		program, args, err = resumeLatestAgentCommand(session, prompt)
+	} else if needsFreshClaudeSession(session, providerID) {
+		program, args, err = startClaudeAgentCommand(session, providerID, prompt)
 	} else {
 		program, args, err = resumeAgentCommand(session, providerID, prompt)
 	}
@@ -275,7 +296,13 @@ func (m *SessionManager) SwitchSurface(session Session, mode string) error {
 	var program string
 	var args []string
 	var err error
-	if providerID == "" {
+	if providerID == "" || needsFreshClaudeSession(session, providerID) {
+		if isClaudeAgent(session.Agent) {
+			providerID = session.ID
+			if err = m.writeProviderSessionMarker(session, providerID); err != nil {
+				return err
+			}
+		}
 		program, args, err = tuiResumeCommand(session)
 	} else {
 		program, args, err = tuiProviderCommand(session, providerID)
@@ -296,7 +323,21 @@ func (m *SessionManager) ResumeTUI(session Session) error {
 	if _, err := m.getLive(session.ID); err == nil {
 		return fmt.Errorf("session is already running")
 	}
-	program, args, err := tuiResumeCommand(session)
+	transcript, _ := os.ReadFile(filepath.Join(m.dataDir, "transcripts", session.ID+".log"))
+	providerID := providerSessionID(transcript, session.Agent)
+	var program string
+	var args []string
+	var err error
+	if providerID != "" && !needsFreshClaudeSession(session, providerID) {
+		program, args, err = tuiProviderCommand(session, providerID)
+	} else {
+		if isClaudeAgent(session.Agent) {
+			if err = m.writeProviderSessionMarker(session, session.ID); err != nil {
+				return err
+			}
+		}
+		program, args, err = tuiResumeCommand(session)
+	}
 	if err != nil {
 		return err
 	}
@@ -315,15 +356,20 @@ func resumeAgentCommand(session Session, providerID, prompt string) (string, []s
 	}
 	switch name {
 	case "claude":
-		return program, []string{
-			"--resume", providerID, "--print", "--verbose", "--output-format", "stream-json",
-			"--include-partial-messages", "--permission-mode", "acceptEdits", prompt,
-		}, nil
+		return "/bin/sh", []string{"-lc", `exec "$1" --resume "$2" --print --verbose --output-format stream-json --include-partial-messages --permission-mode acceptEdits "$3" </dev/null`, "openade-claude-resume", program, providerID, prompt}, nil
 	case "codex":
 		return "/bin/sh", []string{"-lc", `exec "$1" exec --json --sandbox workspace-write resume "$2" "$3" </dev/null`, "openade-codex-resume", program, providerID, prompt}, nil
 	default:
 		return "", nil, fmt.Errorf("follow-up messages are not supported for %s", session.Agent)
 	}
+}
+
+func startClaudeAgentCommand(session Session, providerID, prompt string) (string, []string, error) {
+	program, err := resolveProgram("claude")
+	if err != nil {
+		return "", nil, err
+	}
+	return "/bin/sh", []string{"-lc", `exec "$1" --session-id "$2" --print --verbose --output-format stream-json --include-partial-messages --permission-mode acceptEdits "$3" </dev/null`, "openade-claude-start", program, providerID, prompt}, nil
 }
 
 func resumeLatestAgentCommand(session Session, prompt string) (string, []string, error) {
@@ -338,10 +384,7 @@ func resumeLatestAgentCommand(session Session, prompt string) (string, []string,
 	}
 	switch name {
 	case "claude":
-		return program, []string{
-			"--continue", "--print", "--verbose", "--output-format", "stream-json",
-			"--include-partial-messages", "--permission-mode", "acceptEdits", prompt,
-		}, nil
+		return "/bin/sh", []string{"-lc", `exec "$1" --continue --print --verbose --output-format stream-json --include-partial-messages --permission-mode acceptEdits "$2" </dev/null`, "openade-claude-continue", program, prompt}, nil
 	case "codex":
 		return "/bin/sh", []string{"-lc", `exec "$1" exec --json --sandbox workspace-write resume --last "$2" </dev/null`, "openade-codex-resume-last", program, prompt}, nil
 	default:
@@ -399,7 +442,7 @@ func agentCommand(session Session) (string, []string, error) {
 			}
 			return program, args, nil
 		case "claude":
-			args := []string{"--permission-mode", "acceptEdits"}
+			args := []string{"--session-id", session.ID, "--permission-mode", "acceptEdits"}
 			if session.Prompt != "" {
 				args = append(args, session.Prompt)
 			}
@@ -418,15 +461,10 @@ func agentCommand(session Session) (string, []string, error) {
 			return program, []string{"--prompt", session.Prompt}, nil
 		}
 	case "claude":
-		args := []string{"--name", session.Title}
 		if session.Prompt != "" {
-			args = append(args,
-				"--print", "--verbose", "--output-format", "stream-json",
-				"--include-partial-messages", "--permission-mode", "acceptEdits",
-				session.Prompt,
-			)
+			return "/bin/sh", []string{"-lc", `exec "$1" --name "$2" --print --verbose --output-format stream-json --include-partial-messages --permission-mode acceptEdits "$3" </dev/null`, "openade-claude", program, session.Title, session.Prompt}, nil
 		}
-		return program, args, nil
+		return program, []string{"--name", session.Title}, nil
 	case "codex":
 		if session.Prompt != "" {
 			// Codex reads stdin in exec mode even with a prompt. Keep stdout on the
@@ -455,10 +493,31 @@ func tuiResumeCommand(session Session) (string, []string, error) {
 	case "codex":
 		return program, []string{"resume", "--last", "--no-alt-screen", "-C", session.WorktreePath}, nil
 	case "claude":
-		return program, []string{"--continue", "--permission-mode", "acceptEdits"}, nil
+		return program, []string{"--session-id", session.ID, "--permission-mode", "acceptEdits"}, nil
 	default:
 		return "", nil, fmt.Errorf("direct TUI mode is only supported for Codex and Claude Code")
 	}
+}
+
+func isClaudeAgent(agent string) bool {
+	agent = strings.ToLower(agent)
+	return agent == "claude" || agent == "claude-code"
+}
+
+func needsFreshClaudeSession(session Session, providerID string) bool {
+	if !isClaudeAgent(session.Agent) || providerID == "" || providerID != session.ID {
+		return false
+	}
+	configDir := strings.TrimSpace(os.Getenv("CLAUDE_CONFIG_DIR"))
+	if configDir == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return false
+		}
+		configDir = filepath.Join(home, ".claude")
+	}
+	matches, err := filepath.Glob(filepath.Join(configDir, "projects", "*", providerID+".jsonl"))
+	return err == nil && len(matches) == 0
 }
 
 func resolveProgram(name string) (string, error) {

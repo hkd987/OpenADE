@@ -45,4 +45,16 @@ describe("parseChatTranscript", () => {
       "Second answer",
     ]);
   });
+
+  it("keeps JSON chat events after an unterminated terminal escape", () => {
+    const transcript = [
+      "\u001b]0;unterminated terminal title",
+      '{"type":"openade.user_message","text":"Continue here"}',
+      '{"type":"assistant","message":{"content":[{"type":"text","text":"surface switch verified."}]}}',
+    ].join("\n");
+    expect(parseChatTranscript(transcript, "", false).map((turn) => turn.markdown)).toEqual([
+      "Continue here",
+      "surface switch verified.",
+    ]);
+  });
 });

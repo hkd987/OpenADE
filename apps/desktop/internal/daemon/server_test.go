@@ -479,6 +479,119 @@ printf 'SURFACE_ARGS:%s\n' "$*"
 	}
 }
 
+func TestClaudeTUISurfaceKeepsAStableProviderSession(t *testing.T) {
+	repo := createFixtureRepository(t)
+	binDir := t.TempDir()
+	fakeClaude := filepath.Join(binDir, "claude")
+	script := `#!/bin/sh
+printf 'CLAUDE_ARGS:%s\n' "$*"
+previous=''
+for argument in "$@"; do
+  if [ "$previous" = '--session-id' ]; then
+    mkdir -p "$CLAUDE_CONFIG_DIR/projects/openade-test"
+    printf '{}\n' > "$CLAUDE_CONFIG_DIR/projects/openade-test/$argument.jsonl"
+    break
+  fi
+  previous="$argument"
+done
+`
+	if err := os.WriteFile(fakeClaude, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	claudeConfig := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", claudeConfig)
+	nativeProgram, nativeArgs, err := startClaudeAgentCommand(Session{Agent: "claude"}, "provider-test", "hello")
+	if err != nil || nativeProgram != "/bin/sh" || !strings.Contains(strings.Join(nativeArgs, " "), "</dev/null") {
+		t.Fatalf("Claude native command must close stdin: program=%q args=%q err=%v", nativeProgram, nativeArgs, err)
+	}
+	d, err := New(Config{DataDir: t.TempDir(), Addr: "127.0.0.1:0"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.store.Close()
+
+	session, err := d.sessions.Create(context.Background(), CreateSessionRequest{
+		Title: "Claude TUI", Prompt: "first turn", Agent: "claude", Mode: "tui", RepoRoot: repo, BaseBranch: "main",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForCompleted := func() []byte {
+		t.Helper()
+		deadline := time.Now().Add(3 * time.Second)
+		for time.Now().Before(deadline) {
+			current, _ := d.store.GetSession(session.ID)
+			if current.Status == "completed" {
+				break
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		transcript, _ := os.ReadFile(filepath.Join(d.config.DataDir, "transcripts", session.ID+".log"))
+		return transcript
+	}
+
+	transcript := waitForCompleted()
+	if providerSessionID(transcript, "claude") != session.ID {
+		t.Fatalf("Claude TUI provider ID was not indexed: %s", transcript)
+	}
+	if !strings.Contains(string(transcript), "--session-id "+session.ID) {
+		t.Fatalf("new Claude TUI did not receive its stable session ID: %s", transcript)
+	}
+
+	if err := d.sessions.SwitchSurface(session, "chat"); err != nil {
+		t.Fatal(err)
+	}
+	session, _ = d.store.GetSession(session.ID)
+	if err := os.Remove(filepath.Join(claudeConfig, "projects", "openade-test", session.ID+".jsonl")); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.sessions.Resume(session, "first native turn"); err != nil {
+		t.Fatal(err)
+	}
+	transcript = waitForCompleted()
+	if !strings.Contains(string(transcript), "--session-id "+session.ID+" --print") {
+		t.Fatalf("first native turn did not start the indexed provider session: %s", transcript)
+	}
+	session, _ = d.store.GetSession(session.ID)
+	if err := d.sessions.SwitchSurface(session, "tui"); err != nil {
+		t.Fatal(err)
+	}
+	transcript = waitForCompleted()
+	if !strings.Contains(string(transcript), "--resume "+session.ID) {
+		t.Fatalf("Claude TUI did not resume the indexed provider session: %s", transcript)
+	}
+}
+
+func TestProviderSessionMarkerIsFramedAfterRawPTYOutput(t *testing.T) {
+	dataDir := t.TempDir()
+	d, err := New(Config{DataDir: dataDir, Addr: "127.0.0.1:0"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.store.Close()
+
+	session := Session{ID: "83f66ee0-98a7-4f76-b5c2-1ca45ff24689", Agent: "claude"}
+	transcriptDir := filepath.Join(dataDir, "transcripts")
+	if err := os.MkdirAll(transcriptDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	transcriptPath := filepath.Join(transcriptDir, session.ID+".log")
+	if err := os.WriteFile(transcriptPath, []byte("\x1b[?25hraw-terminal-output"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.sessions.writeProviderSessionMarker(session, session.ID); err != nil {
+		t.Fatal(err)
+	}
+	transcript, err := os.ReadFile(transcriptPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if providerSessionID(transcript, session.Agent) != session.ID {
+		t.Fatalf("provider marker was not a standalone JSONL record: %q", transcript)
+	}
+}
+
 func TestActiveTUISwitchesToNativeChatAndResumesOnTheNextMessage(t *testing.T) {
 	repo := createFixtureRepository(t)
 	binDir := t.TempDir()

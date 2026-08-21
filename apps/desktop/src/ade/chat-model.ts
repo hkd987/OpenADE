@@ -31,8 +31,11 @@ export function parseChatTranscript(
   let partial = "";
   let finalMessage = "";
 
-  for (const rawLine of stripANSI(value).replace(/\r/g, "").split("\n")) {
-    const line = rawLine.trim();
+  // Strip terminal escapes one line at a time. A raw TUI can leave an OSC
+  // sequence unterminated; stripping the entire transcript at once would then
+  // swallow every later JSON event, including valid streamed chat responses.
+  for (const rawLine of value.replace(/\r/g, "").split("\n")) {
+    const line = stripANSI(rawLine).trim();
     if (!line.startsWith("{")) continue;
     const event = parseEvent(line);
     if (!event) continue;
