@@ -116,6 +116,14 @@ For live UI development, replace `build` with `dev`. The desktop shell starts
 or reconnects to the daemon on `127.0.0.1:7433`; closing the window does not
 terminate active agent sessions.
 
+The desktop supports two provider surfaces. **Native chat** parses structured
+Codex or Claude output into streamed Markdown with collapsible activity and a
+local skills/commands picker. **Direct TUI** attaches xterm to the provider's
+real interactive CLI inside the session worktree; the daemon owns that PTY, so
+closing and reopening the desktop does not interrupt it. Independent project
+shells remain separate tabs. Settings can also scan a workspace folder for Git
+projects and group indexed sessions beneath each project in the sidebar.
+
 **From a release** (Linux x86_64/aarch64, macOS Intel/Apple Silicon):
 download the tarball for your platform from
 [GitHub Releases](https://github.com/hkd987/OpenADE/releases), verify the
