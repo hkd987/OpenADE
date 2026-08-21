@@ -55,11 +55,11 @@ type Page = "home" | "sessions" | "agents" | "review";
 type WorkTab = "changes" | "files" | "terminal" | "pull-request" | "ticket";
 
 const agents = [
-  { id: "claude", label: "Claude Code", vendor: "Anthropic" },
-  { id: "codex", label: "Codex CLI", vendor: "OpenAI" },
-  { id: "copilot", label: "Copilot CLI", vendor: "GitHub" },
-  { id: "opencode", label: "OpenCode", vendor: "SST" },
-  { id: "shell", label: "Local shell", vendor: "System" },
+  { id: "claude", label: "Claude Code" },
+  { id: "codex", label: "Codex CLI" },
+  { id: "copilot", label: "Copilot CLI" },
+  { id: "opencode", label: "OpenCode" },
+  { id: "shell", label: "Local shell" },
 ];
 
 const templates = [

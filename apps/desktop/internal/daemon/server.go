@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
@@ -329,12 +328,4 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(value)
-}
-
-func parseUint16(value string, fallback uint16) uint16 {
-	n, err := strconv.ParseUint(value, 10, 16)
-	if err != nil {
-		return fallback
-	}
-	return uint16(n)
 }

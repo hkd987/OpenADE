@@ -91,7 +91,7 @@ func (m *SessionManager) Create(ctx context.Context, request CreateSessionReques
 }
 
 func (m *SessionManager) launch(session Session) error {
-	program, args, seed, err := agentCommand(session)
+	program, args, err := agentCommand(session)
 	if err != nil {
 		return err
 	}
@@ -115,26 +115,20 @@ func (m *SessionManager) launch(session Session) error {
 	transcript, _ := os.OpenFile(filepath.Join(transcriptDir, session.ID+".log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	go m.readOutput(session.ID, live, transcript)
 	go m.wait(session.ID, live, transcript)
-	if seed != "" {
-		go func() {
-			time.Sleep(350 * time.Millisecond)
-			_, _ = io.WriteString(ptmx, seed+"\n")
-		}()
-	}
 	return nil
 }
 
-func agentCommand(session Session) (string, []string, string, error) {
+func agentCommand(session Session) (string, []string, error) {
 	agent := strings.ToLower(session.Agent)
 	if agent == "shell" {
 		if strings.TrimSpace(session.Prompt) != "" {
-			return "/bin/sh", []string{"-lc", session.Prompt}, "", nil
+			return "/bin/sh", []string{"-lc", session.Prompt}, nil
 		}
 		shell := os.Getenv("SHELL")
 		if shell == "" {
 			shell = "/bin/zsh"
 		}
-		return shell, []string{"-l"}, "", nil
+		return shell, []string{"-l"}, nil
 	}
 	name := map[string]string{"claude-code": "claude", "codex-cli": "codex", "github-copilot": "copilot"}[agent]
 	if name == "" {
@@ -142,16 +136,16 @@ func agentCommand(session Session) (string, []string, string, error) {
 	}
 	program, err := resolveProgram(name)
 	if err != nil {
-		return "", nil, "", err
+		return "", nil, err
 	}
 	switch name {
 	case "copilot":
 		if session.Prompt != "" {
-			return program, []string{"-p", session.Prompt}, "", nil
+			return program, []string{"-p", session.Prompt}, nil
 		}
 	case "opencode":
 		if session.Prompt != "" {
-			return program, []string{"--prompt", session.Prompt}, "", nil
+			return program, []string{"--prompt", session.Prompt}, nil
 		}
 	case "claude":
 		args := []string{"--name", session.Title}
@@ -162,19 +156,19 @@ func agentCommand(session Session) (string, []string, string, error) {
 				session.Prompt,
 			)
 		}
-		return program, args, "", nil
+		return program, args, nil
 	case "codex":
 		if session.Prompt != "" {
 			// Codex reads stdin in exec mode even with a prompt. Keep stdout on the
 			// PTY for live events while closing only stdin so the run can begin.
-			return "/bin/sh", []string{"-lc", `exec "$1" exec --json --sandbox workspace-write "$2" </dev/null`, "openade-codex", program, session.Prompt}, "", nil
+			return "/bin/sh", []string{"-lc", `exec "$1" exec --json --sandbox workspace-write "$2" </dev/null`, "openade-codex", program, session.Prompt}, nil
 		}
 	default:
 		if session.Prompt != "" {
-			return program, []string{session.Prompt}, "", nil
+			return program, []string{session.Prompt}, nil
 		}
 	}
-	return program, nil, "", nil
+	return program, nil, nil
 }
 
 func resolveProgram(name string) (string, error) {
