@@ -5,6 +5,7 @@ import {
   GitBranch,
   GitDiff,
   GithubLogo,
+  Plus,
   SidebarSimple,
   SpinnerGap,
   Square,
@@ -16,6 +17,7 @@ import { FormEvent, ReactNode, useEffect, useRef, useState } from "react";
 import {
   createPullRequest,
   getTicket,
+  listAgentCommands,
   projectName,
   sendInput,
   sendMessage,
@@ -23,7 +25,9 @@ import {
   stopSession,
   streamURL,
   Ticket,
+  AgentCommand,
 } from "./api";
+import { AgentCommandMenu, filterAgentCommands } from "./AgentCommandMenu";
 import { ChatTimeline } from "./ChatTimeline";
 import { ReviewWorkspace } from "./ReviewWorkspace";
 import { DirectTUIWorkspace, TerminalWorkspace } from "./Terminal";
@@ -41,6 +45,8 @@ export function SessionWorkspace({ session, preferences, onBack, onRefresh }: { 
   const [output, setOutput] = useState("");
   const [busy, setBusy] = useState(false);
   const [streamVersion, setStreamVersion] = useState(0);
+  const [commands, setCommands] = useState<AgentCommand[]>([]);
+  const [commandOpen, setCommandOpen] = useState(false);
   const outputRef = useRef<HTMLDivElement>(null);
   const tuiMode = session.mode === "tui";
   const active = ["running", "starting", "waiting"].includes(session.status);
@@ -69,6 +75,11 @@ export function SessionWorkspace({ session, preferences, onBack, onRefresh }: { 
   }, [session.id, streamVersion, tuiMode]);
 
   useEffect(() => {
+    if (!chatCapable) return;
+    void listAgentCommands(session.id).then(setCommands).catch(() => setCommands([]));
+  }, [chatCapable, session.id]);
+
+  useEffect(() => {
     outputRef.current?.scrollTo({ top: outputRef.current.scrollHeight, behavior: "smooth" });
   }, [output]);
 
@@ -95,6 +106,12 @@ export function SessionWorkspace({ session, preferences, onBack, onRefresh }: { 
     } catch (reason) {
       setPanelError(reason instanceof Error ? reason.message : String(reason));
     }
+  };
+
+  const insertCommand = (command: AgentCommand) => {
+    setInput(`${command.invocation} `);
+    setCommandOpen(false);
+    window.setTimeout(() => document.querySelector<HTMLTextAreaElement>(".session-composer textarea")?.focus(), 0);
   };
 
   const createPR = async () => {
@@ -142,13 +159,27 @@ export function SessionWorkspace({ session, preferences, onBack, onRefresh }: { 
           {chatCapable ? <ChatTimeline session={session} output={output} activityExpanded={preferences.activity_detail === "expanded"} /> : <div className="shell-session-note"><TerminalWindow /><div><strong>Terminal run</strong><p>This run stays in the terminal so command output never gets mixed into chat.</p></div></div>}
         </div>
         {canMessage ? <form className="session-composer" onSubmit={submit}>
+          {commandOpen && <AgentCommandMenu commands={commands} input={input} onSelect={insertCommand} />}
           <textarea
             value={input}
-            onChange={(event) => setInput(event.target.value)}
+            onChange={(event) => { const value = event.target.value; setInput(value); if (/^\s*[/ $]/.test(value)) setCommandOpen(true); }}
             placeholder={canMessage ? `Message ${agentLabel(session.agent)}…` : "This run does not support follow-up messages"}
             rows={2}
             disabled={!canMessage}
             onKeyDown={(event) => {
+              if (event.key === "Escape" && commandOpen) {
+                event.preventDefault();
+                setCommandOpen(false);
+                return;
+              }
+              if (event.key === "Enter" && commandOpen && !event.shiftKey) {
+                const first = filterAgentCommands(commands, input)[0];
+                if (first) {
+                  event.preventDefault();
+                  insertCommand(first);
+                  return;
+                }
+              }
               if (event.key === "Enter" && !event.shiftKey) {
                 event.preventDefault();
                 event.currentTarget.form?.requestSubmit();
@@ -156,6 +187,7 @@ export function SessionWorkspace({ session, preferences, onBack, onRefresh }: { 
             }}
           />
           <div className="composer-footer">
+            <button type="button" className={`command-trigger ${commandOpen ? "active" : ""}`} onClick={() => setCommandOpen((value) => !value)} aria-label="Skills and commands" title="Skills and commands"><Plus /></button>
             <span className="runtime-chip"><span className={`status-dot ${session.status}`} />{active ? `${agentLabel(session.agent)} is attached` : resumable ? "Conversation can continue" : `Run ${session.status}`}</span>
             <button className="send-button" disabled={!canMessage || !input.trim()} aria-label="Send message"><ArrowUp weight="bold" /></button>
           </div>

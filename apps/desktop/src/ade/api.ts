@@ -49,6 +49,15 @@ export interface AgentInfo {
   path: string;
 }
 
+export interface AgentCommand {
+  id: string;
+  name: string;
+  kind: "command" | "skill";
+  source: string;
+  invocation: string;
+  description?: string;
+}
+
 export interface Meta {
   agents: AgentInfo[];
   github_available: boolean;
@@ -157,6 +166,11 @@ export const sendMessage = (id: string, text: string) =>
 
 export const resumeTUI = (id: string) =>
   request<Session>(`/api/sessions/${id}/resume-tui`, { method: "POST" });
+
+export async function listAgentCommands(id: string): Promise<AgentCommand[]> {
+  const payload = await request<{ commands: AgentCommand[] }>(`/api/sessions/${id}/commands`);
+  return payload.commands ?? [];
+}
 
 export const resizeTerminal = (id: string, rows: number, cols: number) =>
   request<void>(`/api/sessions/${id}/resize`, {
