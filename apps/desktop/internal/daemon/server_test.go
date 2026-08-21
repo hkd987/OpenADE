@@ -120,6 +120,58 @@ func TestProjectTerminalsAreIndependentAndIndexed(t *testing.T) {
 	_ = d.sessions.Stop(session.ID)
 }
 
+func TestCompletedCodexSessionCanResumeWithFollowUpMessage(t *testing.T) {
+	repo := createFixtureRepository(t)
+	binDir := t.TempDir()
+	fakeCodex := filepath.Join(binDir, "codex")
+	script := `#!/bin/sh
+printf '%s\n' '{"type":"thread.started","thread_id":"thread-test"}'
+printf '{"type":"item.completed","item":{"type":"agent_message","text":"%s"}}\n' "$*"
+`
+	if err := os.WriteFile(fakeCodex, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	d, err := New(Config{DataDir: t.TempDir(), Addr: "127.0.0.1:0"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.store.Close()
+
+	request := CreateSessionRequest{Title: "Conversation", Prompt: "first turn", Agent: "codex", RepoRoot: repo, BaseBranch: "main"}
+	created, err := d.sessions.Create(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		created, _ = d.store.GetSession(created.ID)
+		if created.Status == "completed" {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	messageBody, _ := json.Marshal(map[string]string{"text": "follow-up turn"})
+	messageRequest := httptest.NewRequest(http.MethodPost, "/api/sessions/"+created.ID+"/messages", bytes.NewReader(messageBody))
+	messageResponse := httptest.NewRecorder()
+	d.routes().ServeHTTP(messageResponse, messageRequest)
+	if messageResponse.Code != http.StatusAccepted {
+		t.Fatalf("message status=%d body=%s", messageResponse.Code, messageResponse.Body.String())
+	}
+	deadline = time.Now().Add(3 * time.Second)
+	var transcript []byte
+	for time.Now().Before(deadline) {
+		transcript, _ = os.ReadFile(filepath.Join(d.config.DataDir, "transcripts", created.ID+".log"))
+		if strings.Contains(string(transcript), "resume thread-test follow-up turn") {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !strings.Contains(string(transcript), "resume thread-test follow-up turn") {
+		t.Fatalf("follow-up did not resume provider conversation: %s", transcript)
+	}
+}
+
 func TestMakeBranchSanitizesInput(t *testing.T) {
 	branch := makeBranch("DEV-9", "Fix spaces & checkout!!!", "12345678-abcd")
 	if branch != "dev-9/fix-spaces-checkout-12345678" {

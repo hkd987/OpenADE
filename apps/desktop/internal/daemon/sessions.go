@@ -3,6 +3,7 @@ package daemon
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -95,6 +96,10 @@ func (m *SessionManager) launch(session Session) error {
 	if err != nil {
 		return err
 	}
+	return m.launchCommand(session, program, args)
+}
+
+func (m *SessionManager) launchCommand(session Session, program string, args []string) error {
 	cmd := exec.Command(program, args...)
 	cmd.Dir = session.WorktreePath
 	cmd.Env = append(os.Environ(), "TERM=xterm-256color", "COLORTERM=truecolor", "OPENADE_SESSION_ID="+session.ID)
@@ -116,6 +121,85 @@ func (m *SessionManager) launch(session Session) error {
 	go m.readOutput(session.ID, live, transcript)
 	go m.wait(session.ID, live, transcript)
 	return nil
+}
+
+func (m *SessionManager) Resume(session Session, prompt string) error {
+	prompt = strings.TrimSpace(prompt)
+	if prompt == "" {
+		return fmt.Errorf("message is required")
+	}
+	if _, err := m.getLive(session.ID); err == nil {
+		return fmt.Errorf("session is already running")
+	}
+	transcriptPath := filepath.Join(m.dataDir, "transcripts", session.ID+".log")
+	transcript, err := os.ReadFile(transcriptPath)
+	if err != nil {
+		return fmt.Errorf("read session transcript: %w", err)
+	}
+	providerID := providerSessionID(transcript, session.Agent)
+	if providerID == "" {
+		return fmt.Errorf("%s session id was not found in the transcript", session.Agent)
+	}
+	marker, _ := json.Marshal(map[string]string{"type": "openade.user_message", "text": prompt})
+	file, err := os.OpenFile(transcriptPath, os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		return err
+	}
+	if _, err := file.Write(append(marker, '\n')); err != nil {
+		_ = file.Close()
+		return err
+	}
+	_ = file.Close()
+
+	program, args, err := resumeAgentCommand(session, providerID, prompt)
+	if err != nil {
+		return err
+	}
+	return m.launchCommand(session, program, args)
+}
+
+func resumeAgentCommand(session Session, providerID, prompt string) (string, []string, error) {
+	agent := strings.ToLower(session.Agent)
+	name := map[string]string{"claude-code": "claude", "codex-cli": "codex"}[agent]
+	if name == "" {
+		name = agent
+	}
+	program, err := resolveProgram(name)
+	if err != nil {
+		return "", nil, err
+	}
+	switch name {
+	case "claude":
+		return program, []string{
+			"--resume", providerID, "--print", "--verbose", "--output-format", "stream-json",
+			"--include-partial-messages", "--permission-mode", "acceptEdits", prompt,
+		}, nil
+	case "codex":
+		return "/bin/sh", []string{"-lc", `exec "$1" exec --json --sandbox workspace-write resume "$2" "$3" </dev/null`, "openade-codex-resume", program, providerID, prompt}, nil
+	default:
+		return "", nil, fmt.Errorf("follow-up messages are not supported for %s", session.Agent)
+	}
+}
+
+func providerSessionID(transcript []byte, agent string) string {
+	for _, rawLine := range strings.Split(strings.ReplaceAll(string(transcript), "\r", ""), "\n") {
+		line := strings.TrimSpace(rawLine)
+		if !strings.HasPrefix(line, "{") {
+			continue
+		}
+		var event map[string]any
+		if json.Unmarshal([]byte(line), &event) != nil {
+			continue
+		}
+		if strings.Contains(strings.ToLower(agent), "codex") {
+			if id, ok := event["thread_id"].(string); ok && id != "" {
+				return id
+			}
+		} else if id, ok := event["session_id"].(string); ok && id != "" {
+			return id
+		}
+	}
+	return ""
 }
 
 func agentCommand(session Session) (string, []string, error) {
@@ -226,6 +310,9 @@ func (m *SessionManager) wait(id string, live *liveSession, transcript *os.File)
 		}
 	}
 	_ = m.store.UpdateRuntime(id, status, 0, &code)
+	m.mu.Lock()
+	delete(m.live, id)
+	m.mu.Unlock()
 	if transcript != nil {
 		_ = transcript.Close()
 	}
