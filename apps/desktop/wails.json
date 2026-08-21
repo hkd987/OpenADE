@@ -1,0 +1,14 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "name": "OpenADE",
+  "outputfilename": "OpenADE",
+  "frontend:dir": ".",
+  "frontend:install": "npm install --no-audit --no-fund",
+  "frontend:build": "npm run build",
+  "frontend:dev:watcher": "npm run dev",
+  "frontend:dev:serverUrl": "auto",
+  "wailsjsdir": "src/wailsjs",
+  "author": {
+    "name": "OpenADE contributors"
+  }
+}
