@@ -127,7 +127,7 @@ export function DirectTUIWorkspace({ session, onRefresh }: { session: Session; o
       setBusy(false);
     }
   };
-  return <section className="direct-tui-workspace">
+  return <section className={`direct-tui-workspace ${error ? "with-error" : ""}`}>
     <header><span><Cpu /> Direct {agentName(session.agent)} TUI</span><small>Daemon-hosted · {session.worktree_path}</small>{!active && <button type="button" onClick={() => void resume()} disabled={busy}><Play weight="fill" /> Resume</button>}</header>
     {error && <div className="inline-error">{error}</div>}
     <SessionTerminalHost session={session} />
@@ -159,29 +159,23 @@ function TerminalHost({ terminal: projectTerminal }: { terminal: ProjectTerminal
     terminal.loadAddon(fit);
     terminal.open(host);
 
-    let disposed = false;
     const socket = new WebSocket(terminalStreamURL(projectTerminal.id));
     socket.onmessage = (event) => {
       const message = JSON.parse(String(event.data)) as { type: string; data?: string };
       if (message.type === "output" && message.data) terminal.write(message.data);
     };
-    const fitAndResize = () => {
-      if (disposed || host.clientWidth === 0 || host.clientHeight === 0) return;
-      fit.fit();
+    const stopSizing = observeTerminalSize(host, terminal, fit, (rows, cols) => {
       if (projectTerminal.status === "running") {
-        void resizeProjectTerminal(projectTerminal.id, terminal.rows, terminal.cols).catch(() => undefined);
+        return resizeProjectTerminal(projectTerminal.id, rows, cols);
       }
-    };
-    const observer = new ResizeObserver(fitAndResize);
-    observer.observe(host);
-    requestAnimationFrame(fitAndResize);
+      return Promise.resolve();
+    });
     const input = terminal.onData((data) => {
       void sendTerminalInput(projectTerminal.id, data).catch(() => undefined);
     });
 
     return () => {
-      disposed = true;
-      observer.disconnect();
+      stopSizing();
       input.dispose();
       socket.close();
       terminal.dispose();
@@ -216,15 +210,52 @@ function TerminalSurface({ id, title, running, socketURL, onInput, onResize }: {
       theme: { background: "#111315", foreground: "#d9dddf", cursor: "#f2f4f5", selectionBackground: "#38566f88", black: "#111315", red: "#f06a6a", green: "#75d196", yellow: "#e3b764", blue: "#69aee8", magenta: "#c59bea", cyan: "#76c7c2", white: "#e9ecee", brightBlack: "#687078" },
     });
     const fit = new FitAddon(); terminal.loadAddon(fit); terminal.open(host);
-    let disposed = false;
     const socket = new WebSocket(socketURL);
     socket.onmessage = (event) => { const message = JSON.parse(String(event.data)) as { type: string; data?: string }; if (message.type === "output" && message.data) terminal.write(message.data); };
-    const fitAndResize = () => { if (disposed || host.clientWidth === 0 || host.clientHeight === 0) return; fit.fit(); if (running) void onResize(terminal.rows, terminal.cols).catch(() => undefined); };
-    const observer = new ResizeObserver(fitAndResize); observer.observe(host); requestAnimationFrame(fitAndResize);
+    const stopSizing = observeTerminalSize(host, terminal, fit, (rows, cols) => running ? onResize(rows, cols) : Promise.resolve());
     const input = terminal.onData((data) => { void onInput(data).catch(() => undefined); });
-    return () => { disposed = true; observer.disconnect(); input.dispose(); socket.close(); terminal.dispose(); };
+    return () => { stopSizing(); input.dispose(); socket.close(); terminal.dispose(); };
   }, [id, onInput, onResize, running, socketURL]);
   return <div className="terminal-host direct-tui-host" ref={hostRef} aria-label={`${title} in project worktree`} />;
+}
+
+function observeTerminalSize(
+  host: HTMLDivElement,
+  terminal: Terminal,
+  fit: FitAddon,
+  resizePTY: (rows: number, cols: number) => Promise<void>,
+) {
+  let disposed = false;
+  let frame: number | null = null;
+  let lastSize = "";
+
+  const fitAndResize = () => {
+    frame = null;
+    if (disposed || host.clientWidth === 0 || host.clientHeight === 0) return;
+    fit.fit();
+    const nextSize = `${terminal.rows}x${terminal.cols}`;
+    if (nextSize === lastSize) return;
+    lastSize = nextSize;
+    void resizePTY(terminal.rows, terminal.cols).catch(() => undefined);
+  };
+  const scheduleFit = () => {
+    if (disposed) return;
+    if (frame !== null) cancelAnimationFrame(frame);
+    frame = requestAnimationFrame(fitAndResize);
+  };
+
+  const observer = new ResizeObserver(scheduleFit);
+  observer.observe(host);
+  window.addEventListener("resize", scheduleFit);
+  scheduleFit();
+  void document.fonts?.ready.then(scheduleFit);
+
+  return () => {
+    disposed = true;
+    observer.disconnect();
+    window.removeEventListener("resize", scheduleFit);
+    if (frame !== null) cancelAnimationFrame(frame);
+  };
 }
 
 function agentName(agent: string): string {
