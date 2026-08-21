@@ -12,15 +12,18 @@ import {
   Ticket as TicketIcon,
   X,
 } from "@phosphor-icons/react";
-import { FormEvent, ReactNode, useEffect, useRef, useState } from "react";
+import { FormEvent, ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import {
   createPullRequest,
+  enqueueMessage,
   getTicket,
   listAgentCommands,
+  listMessageQueue,
   projectName,
-  sendInput,
-  sendMessage,
+  QueuedMessage,
+  removeQueuedMessage as removeQueuedMessageRequest,
   Session,
+  steerQueuedMessage as steerQueuedMessageRequest,
   stopSession,
   streamURL,
   Ticket,
@@ -31,6 +34,7 @@ import { ChatTimeline } from "./ChatTimeline";
 import { ReviewWorkspace } from "./ReviewWorkspace";
 import { DirectTUIWorkspace, TerminalWorkspace } from "./Terminal";
 import { Preferences } from "./preferences";
+import { MessageQueue } from "./MessageQueue";
 
 type WorkTab = "review" | "terminal" | "pull-request" | "ticket";
 
@@ -47,7 +51,9 @@ export function SessionWorkspace({ session, preferences, onBack, onRefresh }: { 
   const [streamVersion, setStreamVersion] = useState(0);
   const [commands, setCommands] = useState<AgentCommand[]>([]);
   const [commandOpen, setCommandOpen] = useState(false);
+  const [queuedMessages, setQueuedMessages] = useState<QueuedMessage[]>([]);
   const outputRef = useRef<HTMLDivElement>(null);
+  const reconnectStreamRef = useRef(false);
   const active = ["running", "starting", "waiting"].includes(session.status);
   const resumable = ["claude", "claude-code", "codex", "codex-cli"].includes(session.agent) && !active;
   const chatCapable = session.agent !== "shell" && !tuiMode;
@@ -60,9 +66,29 @@ export function SessionWorkspace({ session, preferences, onBack, onRefresh }: { 
     setTicket(null);
   }, [defaultTab, preferences.session_surface, session.agent, session.id, tuiMode]);
 
+  const refreshQueue = useCallback(async () => {
+    if (!chatCapable) return;
+    try {
+      setQueuedMessages(await listMessageQueue(session.id));
+    } catch {
+      // The session refresh loop will surface daemon connectivity errors globally.
+    }
+  }, [chatCapable, session.id]);
+
+  useEffect(() => {
+    if (!chatCapable) return;
+    void refreshQueue();
+    const timer = window.setInterval(() => void refreshQueue(), 800);
+    return () => window.clearInterval(timer);
+  }, [chatCapable, refreshQueue]);
+
+  useEffect(() => {
+    reconnectStreamRef.current = active || queuedMessages.length > 0;
+  }, [active, queuedMessages.length]);
+
   useEffect(() => {
     if (tuiMode) return;
-    setOutput("");
+    let disposed = false;
     const socket = new WebSocket(streamURL(session.id));
     socket.onmessage = (event) => {
       const message = JSON.parse(String(event.data)) as { type: string; data?: string };
@@ -70,8 +96,18 @@ export function SessionWorkspace({ session, preferences, onBack, onRefresh }: { 
         setOutput((current) => (current + message.data!).slice(-2_000_000));
       }
     };
-    return () => socket.close();
+    socket.onclose = () => {
+      if (!disposed && reconnectStreamRef.current) {
+        window.setTimeout(() => setStreamVersion((current) => current + 1), 250);
+      }
+    };
+    return () => {
+      disposed = true;
+      socket.close();
+    };
   }, [session.id, streamVersion, tuiMode]);
+
+  useEffect(() => setOutput(""), [session.id]);
 
   useEffect(() => {
     if (!chatCapable) return;
@@ -93,17 +129,54 @@ export function SessionWorkspace({ session, preferences, onBack, onRefresh }: { 
     if (!input.trim() || !canMessage) return;
     const value = input.trim();
     setInput("");
+    setPanelError(null);
     try {
-      if (active) {
-        await sendInput(session.id, value + "\n");
-      } else {
-        setOutput((current) => `${current}\n${JSON.stringify({ type: "openade.user_message", text: value })}\n`);
-        await sendMessage(session.id, value);
-        setStreamVersion((current) => current + 1);
-        await onRefresh();
-      }
+      const queued = await enqueueMessage(session.id, value);
+      setQueuedMessages((current) => [...current.filter((item) => item.id !== queued.id), queued]);
+      await onRefresh();
+      await refreshQueue();
+    } catch (reason) {
+      setInput(value);
+      setPanelError(reason instanceof Error ? reason.message : String(reason));
+    }
+  };
+
+  const steerQueuedMessage = async (id: string) => {
+    setQueuedMessages((current) => {
+      const selected = current.find((item) => item.id === id);
+      return selected ? [selected, ...current.filter((item) => item.id !== id)] : current;
+    });
+    try {
+      await steerQueuedMessageRequest(session.id, id);
+      await refreshQueue();
     } catch (reason) {
       setPanelError(reason instanceof Error ? reason.message : String(reason));
+      await refreshQueue();
+    }
+  };
+
+  const removeQueuedMessage = async (id: string) => {
+    setQueuedMessages((current) => current.filter((item) => item.id !== id));
+    try {
+      await removeQueuedMessageRequest(session.id, id);
+    } catch (reason) {
+      setPanelError(reason instanceof Error ? reason.message : String(reason));
+      await refreshQueue();
+    }
+  };
+
+  const editQueuedMessage = async (id: string) => {
+    const selected = queuedMessages.find((item) => item.id === id);
+    if (!selected) return;
+    setQueuedMessages((current) => current.filter((item) => item.id !== id));
+    setInput(selected.text);
+    window.setTimeout(() => document.querySelector<HTMLTextAreaElement>(".session-composer textarea")?.focus(), 0);
+    try {
+      await removeQueuedMessageRequest(session.id, id);
+    } catch (reason) {
+      setPanelError(reason instanceof Error ? reason.message : String(reason));
+      setInput("");
+      await refreshQueue();
     }
   };
 
@@ -155,7 +228,9 @@ export function SessionWorkspace({ session, preferences, onBack, onRefresh }: { 
         <div className="messages" ref={outputRef}>
           {chatCapable ? <ChatTimeline session={session} output={output} activityExpanded={preferences.activity_detail === "expanded"} /> : <div className="shell-session-note"><TerminalWindow /><div><strong>Terminal run</strong><p>This run stays in the terminal so command output never gets mixed into chat.</p></div></div>}
         </div>
-        {canMessage ? <form className="session-composer" onSubmit={submit}>
+        {canMessage ? <div className={`session-composer-dock ${queuedMessages.length ? "with-queue" : ""}`}>
+          <MessageQueue messages={queuedMessages} sendingId={queuedMessages.find((item) => item.status === "dispatching")?.id ?? null} onSteer={(id) => void steerQueuedMessage(id)} onRemove={(id) => void removeQueuedMessage(id)} onEdit={(id) => void editQueuedMessage(id)} />
+          <form className="session-composer" onSubmit={submit}>
           {commandOpen && <AgentCommandMenu commands={commands} input={input} onSelect={insertCommand} />}
           <textarea
             value={input}
@@ -185,10 +260,11 @@ export function SessionWorkspace({ session, preferences, onBack, onRefresh }: { 
           />
           <div className="composer-footer">
             <button type="button" className={`command-trigger ${commandOpen ? "active" : ""}`} onClick={() => setCommandOpen((value) => !value)} aria-label="Skills and commands" title="Skills and commands"><Plus /></button>
-            <span className="runtime-chip"><span className={`status-dot ${session.status}`} />{active ? `${agentLabel(session.agent)} is attached` : resumable ? "Conversation can continue" : `Run ${session.status}`}</span>
+            <span className="runtime-chip"><span className={`status-dot ${session.status}`} />{active ? queuedMessages.length ? `${queuedMessages.length} queued · agent working` : `${agentLabel(session.agent)} is attached` : queuedMessages.some((item) => item.status === "dispatching") ? "Sending next message" : resumable ? "Conversation can continue" : `Run ${session.status}`}</span>
             <button className="send-button" disabled={!canMessage || !input.trim()} aria-label="Send message"><ArrowUp weight="bold" /></button>
           </div>
-        </form> : <div className="session-closed-state"><span className={`status-dot ${session.status}`} />{chatCapable ? `This ${agentLabel(session.agent)} run is ${session.status}` : "Use the Terminal panel to inspect this run"}</div>}</>}
+          </form>
+        </div> : <div className="session-closed-state"><span className={`status-dot ${session.status}`} />{chatCapable ? `This ${agentLabel(session.agent)} run is ${session.status}` : "Use the Terminal panel to inspect this run"}</div>}</>}
       </section>
       {rightOpen && (
         <aside className="work-panel" aria-label={`${workTabLabel(tab)} panel`}>

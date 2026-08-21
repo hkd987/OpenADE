@@ -424,6 +424,96 @@ printf '{"type":"item.completed","item":{"type":"agent_message","text":"%s"}}\n'
 	}
 }
 
+func TestQueuedMessagesPersistAndDrainInSteeredOrder(t *testing.T) {
+	repo := createFixtureRepository(t)
+	binDir := t.TempDir()
+	fakeCodex := filepath.Join(binDir, "codex")
+	script := `#!/bin/sh
+printf '%s\n' '{"type":"thread.started","thread_id":"thread-queue"}'
+case "$*" in *"first turn"*) sleep 0.8 ;; esac
+printf '{"type":"item.completed","item":{"type":"agent_message","text":"%s"}}\n' "$*"
+`
+	if err := os.WriteFile(fakeCodex, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	d, err := New(Config{DataDir: t.TempDir(), Addr: "127.0.0.1:0"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.store.Close()
+
+	created, err := d.sessions.Create(context.Background(), CreateSessionRequest{Title: "Queued conversation", Prompt: "first turn", Agent: "codex", RepoRoot: repo, BaseBranch: "main"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	enqueue := func(text string) QueuedMessage {
+		t.Helper()
+		body, _ := json.Marshal(map[string]string{"text": text})
+		request := httptest.NewRequest(http.MethodPost, "/api/sessions/"+created.ID+"/message-queue", bytes.NewReader(body))
+		response := httptest.NewRecorder()
+		d.routes().ServeHTTP(response, request)
+		if response.Code != http.StatusAccepted {
+			t.Fatalf("enqueue status=%d body=%s", response.Code, response.Body.String())
+		}
+		var message QueuedMessage
+		if err := json.Unmarshal(response.Body.Bytes(), &message); err != nil {
+			t.Fatal(err)
+		}
+		return message
+	}
+	first := enqueue("first queued")
+	priority := enqueue("priority queued")
+	removed := enqueue("remove me")
+
+	steerRequest := httptest.NewRequest(http.MethodPost, "/api/sessions/"+created.ID+"/message-queue/"+priority.ID+"/steer", nil)
+	steerResponse := httptest.NewRecorder()
+	d.routes().ServeHTTP(steerResponse, steerRequest)
+	if steerResponse.Code != http.StatusNoContent {
+		t.Fatalf("steer status=%d body=%s", steerResponse.Code, steerResponse.Body.String())
+	}
+	deleteRequest := httptest.NewRequest(http.MethodDelete, "/api/sessions/"+created.ID+"/message-queue/"+removed.ID, nil)
+	deleteResponse := httptest.NewRecorder()
+	d.routes().ServeHTTP(deleteResponse, deleteRequest)
+	if deleteResponse.Code != http.StatusNoContent {
+		t.Fatalf("delete status=%d body=%s", deleteResponse.Code, deleteResponse.Body.String())
+	}
+
+	queued, err := d.store.ListQueuedMessages(created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(queued) != 2 || queued[0].ID != priority.ID || queued[1].ID != first.ID {
+		t.Fatalf("queued order = %#v", queued)
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	var transcript []byte
+	for time.Now().Before(deadline) {
+		transcript, _ = os.ReadFile(filepath.Join(d.config.DataDir, "transcripts", created.ID+".log"))
+		if strings.Contains(string(transcript), "priority queued") && strings.Contains(string(transcript), "first queued") {
+			break
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	priorityIndex := strings.Index(string(transcript), "priority queued")
+	firstIndex := strings.Index(string(transcript), "first queued")
+	if priorityIndex < 0 || firstIndex < 0 || priorityIndex >= firstIndex {
+		t.Fatalf("queue did not drain in steered order: %s", transcript)
+	}
+	deadline = time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		queued, err = d.store.ListQueuedMessages(created.ID)
+		if err == nil && len(queued) == 0 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err != nil || len(queued) != 0 {
+		t.Fatalf("queue after drain = %#v err=%v", queued, err)
+	}
+}
+
 func TestMakeBranchSanitizesInput(t *testing.T) {
 	branch := makeBranch("DEV-9", "Fix spaces & checkout!!!", "12345678-abcd")
 	if branch != "dev-9/fix-spaces-checkout-12345678" {

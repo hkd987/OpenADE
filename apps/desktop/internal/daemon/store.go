@@ -45,6 +45,16 @@ type TerminalSession struct {
 	FinishedAt *time.Time `json:"finished_at,omitempty"`
 }
 
+type QueuedMessage struct {
+	ID        string    `json:"id"`
+	SessionID string    `json:"session_id"`
+	Text      string    `json:"text"`
+	Status    string    `json:"status"`
+	Priority  int       `json:"priority"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
 type Store struct {
 	db *sql.DB
 }
@@ -103,6 +113,16 @@ CREATE TABLE IF NOT EXISTS terminals (
   finished_at TEXT
 );
 CREATE INDEX IF NOT EXISTS terminals_session_idx ON terminals(session_id, created_at);
+CREATE TABLE IF NOT EXISTS message_queue (
+  id TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  text TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'queued',
+  priority INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS message_queue_session_idx ON message_queue(session_id, status, priority DESC, created_at);
 `)
 	if err != nil {
 		return fmt.Errorf("migrate sqlite: %w", err)
@@ -110,12 +130,93 @@ CREATE INDEX IF NOT EXISTS terminals_session_idx ON terminals(session_id, create
 	if _, alterErr := s.db.Exec(`ALTER TABLE sessions ADD COLUMN mode TEXT NOT NULL DEFAULT 'chat'`); alterErr != nil && !strings.Contains(alterErr.Error(), "duplicate column") {
 		return fmt.Errorf("add session mode: %w", alterErr)
 	}
+	if _, resetErr := s.db.Exec(`UPDATE message_queue SET status='queued', updated_at=? WHERE status='dispatching'`, encodeTime(time.Now().UTC())); resetErr != nil {
+		return resetErr
+	}
 	_, err = s.db.Exec(`UPDATE sessions SET status = 'interrupted', pid = 0,
 updated_at = ? WHERE status IN ('starting', 'running', 'waiting')`, time.Now().UTC().Format(time.RFC3339Nano))
 	if err == nil {
 		_, err = s.db.Exec(`UPDATE terminals SET status = 'interrupted', pid = 0,
 updated_at = ? WHERE status IN ('starting', 'running')`, time.Now().UTC().Format(time.RFC3339Nano))
 	}
+	return err
+}
+
+func (s *Store) EnqueueMessage(message QueuedMessage) error {
+	_, err := s.db.Exec(`INSERT INTO message_queue(id,session_id,text,status,priority,created_at,updated_at)
+VALUES(?,?,?,?,?,?,?)`, message.ID, message.SessionID, message.Text, message.Status, message.Priority,
+		encodeTime(message.CreatedAt), encodeTime(message.UpdatedAt))
+	return err
+}
+
+func (s *Store) ListQueuedMessages(sessionID string) ([]QueuedMessage, error) {
+	rows, err := s.db.Query(`SELECT id,session_id,text,status,priority,created_at,updated_at
+FROM message_queue WHERE session_id=? ORDER BY CASE status WHEN 'dispatching' THEN 0 ELSE 1 END, priority DESC, created_at`, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	messages := []QueuedMessage{}
+	for rows.Next() {
+		message, err := scanQueuedMessage(rows)
+		if err != nil {
+			return nil, err
+		}
+		messages = append(messages, message)
+	}
+	return messages, rows.Err()
+}
+
+func (s *Store) PromoteQueuedMessage(sessionID, messageID string) error {
+	result, err := s.db.Exec(`UPDATE message_queue SET priority=(SELECT COALESCE(MAX(priority),0)+1 FROM message_queue WHERE session_id=?), updated_at=?
+WHERE id=? AND session_id=? AND status='queued'`, sessionID, encodeTime(time.Now().UTC()), messageID, sessionID)
+	if err != nil {
+		return err
+	}
+	return requireAffected(result, "queued message")
+}
+
+func (s *Store) DeleteQueuedMessage(sessionID, messageID string) error {
+	result, err := s.db.Exec(`DELETE FROM message_queue WHERE id=? AND session_id=? AND status='queued'`, messageID, sessionID)
+	if err != nil {
+		return err
+	}
+	return requireAffected(result, "queued message")
+}
+
+func (s *Store) ClaimNextQueuedMessage(sessionID string) (QueuedMessage, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return QueuedMessage{}, err
+	}
+	defer tx.Rollback()
+	message, err := scanQueuedMessage(tx.QueryRow(`SELECT id,session_id,text,status,priority,created_at,updated_at
+FROM message_queue WHERE session_id=? AND status='queued' ORDER BY priority DESC, created_at LIMIT 1`, sessionID))
+	if err != nil {
+		return QueuedMessage{}, err
+	}
+	message.Status = "dispatching"
+	message.UpdatedAt = time.Now().UTC()
+	result, err := tx.Exec(`UPDATE message_queue SET status='dispatching', updated_at=? WHERE id=? AND status='queued'`, encodeTime(message.UpdatedAt), message.ID)
+	if err != nil {
+		return QueuedMessage{}, err
+	}
+	if err := requireAffected(result, "queued message"); err != nil {
+		return QueuedMessage{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return QueuedMessage{}, err
+	}
+	return message, nil
+}
+
+func (s *Store) ReleaseQueuedMessage(messageID string) error {
+	_, err := s.db.Exec(`UPDATE message_queue SET status='queued', updated_at=? WHERE id=? AND status='dispatching'`, encodeTime(time.Now().UTC()), messageID)
+	return err
+}
+
+func (s *Store) CompleteQueuedMessage(messageID string) error {
+	_, err := s.db.Exec(`DELETE FROM message_queue WHERE id=? AND status='dispatching'`, messageID)
 	return err
 }
 
@@ -277,6 +378,29 @@ func scanTerminal(row scanner) (TerminalSession, error) {
 		terminal.ExitCode = &code
 	}
 	return terminal, nil
+}
+
+func scanQueuedMessage(row scanner) (QueuedMessage, error) {
+	var message QueuedMessage
+	var created, updated string
+	err := row.Scan(&message.ID, &message.SessionID, &message.Text, &message.Status, &message.Priority, &created, &updated)
+	if err != nil {
+		return message, err
+	}
+	message.CreatedAt, _ = time.Parse(time.RFC3339Nano, created)
+	message.UpdatedAt, _ = time.Parse(time.RFC3339Nano, updated)
+	return message, nil
+}
+
+func requireAffected(result sql.Result, label string) error {
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return fmt.Errorf("%s was not found", label)
+	}
+	return nil
 }
 
 func encodeTime(t time.Time) string { return t.UTC().Format(time.RFC3339Nano) }

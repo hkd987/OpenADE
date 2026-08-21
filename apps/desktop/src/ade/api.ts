@@ -58,6 +58,16 @@ export interface AgentCommand {
   description?: string;
 }
 
+export interface QueuedMessage {
+  id: string;
+  session_id: string;
+  text: string;
+  status: "queued" | "dispatching";
+  priority: number;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface Meta {
   agents: AgentInfo[];
   github_available: boolean;
@@ -183,6 +193,23 @@ export const sendMessage = (id: string, text: string) =>
     method: "POST",
     body: JSON.stringify({ text }),
   });
+
+export async function listMessageQueue(id: string): Promise<QueuedMessage[]> {
+  const payload = await request<{ messages: QueuedMessage[] }>(`/api/sessions/${id}/message-queue`);
+  return payload.messages ?? [];
+}
+
+export const enqueueMessage = (id: string, text: string) =>
+  request<QueuedMessage>(`/api/sessions/${id}/message-queue`, {
+    method: "POST",
+    body: JSON.stringify({ text }),
+  });
+
+export const removeQueuedMessage = (sessionId: string, messageId: string) =>
+  request<void>(`/api/sessions/${sessionId}/message-queue/${messageId}`, { method: "DELETE" });
+
+export const steerQueuedMessage = (sessionId: string, messageId: string) =>
+  request<void>(`/api/sessions/${sessionId}/message-queue/${messageId}/steer`, { method: "POST" });
 
 export const resumeTUI = (id: string) =>
   request<Session>(`/api/sessions/${id}/resume-tui`, { method: "POST" });

@@ -192,7 +192,7 @@ function AppShell() {
         {!connected && <div className="connection-banner"><SpinnerGap className="spin" /> Connecting to the local daemon… {error}</div>}
         {connected && error && <button className="error-toast" onClick={() => setError(null)}><span>{error}</span><X /></button>}
         {selected ? (
-          <SessionWorkspace session={selected} preferences={preferences} onBack={() => setSelectedId(null)} onRefresh={refresh} />
+          <SessionWorkspace key={selected.id} session={selected} preferences={preferences} onBack={() => setSelectedId(null)} onRefresh={refresh} />
         ) : page === "home" ? (
           <Home sessions={sessions} projects={visibleProjects} meta={meta} preferences={preferences} onCreated={(session) => { void refresh(); openSession(session.id); }} onOpen={openSession} onError={setError} />
         ) : page === "sites" ? (

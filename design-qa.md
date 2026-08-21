@@ -52,6 +52,53 @@ passed
 
 ---
 
+# Durable message queue extension QA
+
+## Evidence
+
+- Source visual truth: `/var/folders/2h/k_vpn3_n7kl2knmtx_w78s940000gn/T/codex-clipboard-4c40680a-445d-4965-98e2-959ea374c7ae.png` (902 × 293 px queue and composer reference).
+- Rendered implementation: `../outputs/openade-message-queue-native.jpg` (1,236 × 768 px native Wails window) and `../outputs/openade-message-queue-drained.jpg` (completed daemon-owned queue after the desktop shell was closed and reopened).
+- Focused comparison: `../outputs/openade-message-queue-comparison.jpg`; the 710 × 225 px implementation queue/composer crop was normalized to the 902 × 293 px source at 1× density.
+- Full-view evidence: `../outputs/openade-message-queue-native.jpg`; a separate full-view comparison was unnecessary because the requested visual target is only the focused composer/queue component.
+- State: Codex actively streaming with two queued messages, second item steered to the front, followed by a completed queue with no pending rows.
+
+## Findings
+
+- P0: none.
+- P1: none.
+- P2: none after correction.
+- P3: the reference composer includes model, microphone, and access controls from its host product. OpenADE retains its existing provider status and skills controls because model/permission selection belongs to the configured local harness and Direct TUI.
+
+## Required fidelity surfaces
+
+- Fonts and typography: compact Inter rows, muted progress copy, single-line truncation, and low-emphasis action labels reproduce the reference hierarchy without colliding at the 760 px composer width.
+- Spacing and layout rhythm: the queue tray is inset 12 px from the composer, overlaps its top edge by 1 px, uses 30 px rows, and keeps the progress pill centered 43 px above the queue. The composer remains the dominant surface beneath it.
+- Colors and tokens: queue surfaces, hover states, focus treatment, borders, muted labels, and Glass blur use the established OpenADE tokens. The cool Glass palette intentionally replaces the source application's warm Dusk palette.
+- Image quality and assets: the source contains only interface icons. All queue, steer, delete, and overflow controls use the existing Phosphor icon family; no placeholder image, custom SVG, or CSS-drawn asset was introduced.
+- Copy and content: “Step 1 / 3,” “Steer,” the queued prompts, queue count, and composer placeholder communicate order and state without implementation terminology.
+
+## Comparison history
+
+1. The first implementation placed the queue inside the full-width composer border. The source uses a narrower card attached above the composer, making the queue feel subordinate to the active input (P2).
+2. The correction introduced a dedicated composer dock, inset the queue by 12 px, overlapped the two surfaces by 1 px, and preserved the centered progress pill. The final focused comparison has no actionable P0/P1/P2 mismatch.
+
+## Interactions tested
+
+- Added two messages while a real Codex turn was running and verified immediate ordered queue rendering.
+- Steered the second item to the front and verified visual and daemon ordering.
+- Verified remove and edit-to-composer behavior through component coverage.
+- Verified a dispatching row disables destructive controls and exposes “Sending” state.
+- Closed the desktop shell with two queued messages while a 12-second Codex turn was active.
+- Reopened OpenADE after the daemon completed both queued turns and verified both user prompts and assistant responses in transcript order.
+- Verified the daemon persists queue rows in SQLite, resets interrupted dispatch state on restart, and drains one provider turn at a time.
+- Checked the macOS accessibility tree for the queue region, progress indicator, Steer controls, removal labels, editing labels, and composer state.
+
+## Final result
+
+passed
+
+---
+
 # Seamless macOS shell and session inspector QA
 
 ## Evidence

@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 )
 
@@ -71,6 +72,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 	}
 	errCh := make(chan error, 1)
 	go func() { errCh <- d.server.Serve(listener) }()
+	go d.sessions.DrainAllQueues()
 	select {
 	case <-ctx.Done():
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -101,6 +103,10 @@ func (d *Daemon) routes() http.Handler {
 	mux.HandleFunc("GET /api/sessions/{id}/stream", d.handleStream)
 	mux.HandleFunc("POST /api/sessions/{id}/input", d.handleInput)
 	mux.HandleFunc("POST /api/sessions/{id}/messages", d.handleMessage)
+	mux.HandleFunc("GET /api/sessions/{id}/message-queue", d.handleListMessageQueue)
+	mux.HandleFunc("POST /api/sessions/{id}/message-queue", d.handleEnqueueMessage)
+	mux.HandleFunc("DELETE /api/sessions/{id}/message-queue/{messageID}", d.handleDeleteQueuedMessage)
+	mux.HandleFunc("POST /api/sessions/{id}/message-queue/{messageID}/steer", d.handleSteerQueuedMessage)
 	mux.HandleFunc("POST /api/sessions/{id}/resume-tui", d.handleResumeTUI)
 	mux.HandleFunc("GET /api/sessions/{id}/commands", d.handleSessionCommands)
 	mux.HandleFunc("POST /api/sessions/{id}/resize", d.handleResize)
@@ -266,6 +272,65 @@ func (d *Daemon) handleMessage(w http.ResponseWriter, r *http.Request) {
 	}
 	session, _ = d.store.GetSession(session.ID)
 	writeJSON(w, http.StatusAccepted, session)
+}
+
+func (d *Daemon) handleListMessageQueue(w http.ResponseWriter, r *http.Request) {
+	messages, err := d.store.ListQueuedMessages(r.PathValue("id"))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"messages": messages})
+}
+
+func (d *Daemon) handleEnqueueMessage(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Text string `json:"text"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	body.Text = strings.TrimSpace(body.Text)
+	if body.Text == "" {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("message is required"))
+		return
+	}
+	session, err := d.store.GetSession(r.PathValue("id"))
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	if session.Mode != "chat" || session.Agent == "shell" {
+		writeError(w, http.StatusConflict, fmt.Errorf("message queue is only available for chat sessions"))
+		return
+	}
+	now := time.Now().UTC()
+	message := QueuedMessage{ID: uuid.NewString(), SessionID: session.ID, Text: body.Text, Status: "queued", CreatedAt: now, UpdatedAt: now}
+	if err := d.store.EnqueueMessage(message); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	go func() { _ = d.sessions.DrainQueue(session.ID) }()
+	writeJSON(w, http.StatusAccepted, message)
+}
+
+func (d *Daemon) handleDeleteQueuedMessage(w http.ResponseWriter, r *http.Request) {
+	if err := d.store.DeleteQueuedMessage(r.PathValue("id"), r.PathValue("messageID")); err != nil {
+		writeError(w, http.StatusConflict, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (d *Daemon) handleSteerQueuedMessage(w http.ResponseWriter, r *http.Request) {
+	sessionID := r.PathValue("id")
+	if err := d.store.PromoteQueuedMessage(sessionID, r.PathValue("messageID")); err != nil {
+		writeError(w, http.StatusConflict, err)
+		return
+	}
+	go func() { _ = d.sessions.DrainQueue(sessionID) }()
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (d *Daemon) handleResumeTUI(w http.ResponseWriter, r *http.Request) {

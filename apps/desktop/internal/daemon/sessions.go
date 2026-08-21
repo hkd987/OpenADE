@@ -44,6 +44,7 @@ type SessionManager struct {
 	store   *Store
 	dataDir string
 	mu      sync.RWMutex
+	queueMu sync.Mutex
 	live    map[string]*liveSession
 }
 
@@ -415,6 +416,46 @@ func (m *SessionManager) wait(id string, live *liveSession, transcript *os.File)
 	}
 	live.subscribers = make(map[chan []byte]struct{})
 	live.mu.Unlock()
+	if status == "completed" {
+		go func() { _ = m.DrainQueue(id) }()
+	}
+}
+
+func (m *SessionManager) DrainQueue(id string) error {
+	m.queueMu.Lock()
+	defer m.queueMu.Unlock()
+	if _, err := m.getLive(id); err == nil {
+		return nil
+	}
+	session, err := m.store.GetSession(id)
+	if err != nil {
+		return err
+	}
+	if session.Mode != "chat" || session.Agent == "shell" {
+		return nil
+	}
+	message, err := m.store.ClaimNextQueuedMessage(id)
+	if IsNotFound(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if err := m.Resume(session, message.Text); err != nil {
+		_ = m.store.ReleaseQueuedMessage(message.ID)
+		return err
+	}
+	return m.store.CompleteQueuedMessage(message.ID)
+}
+
+func (m *SessionManager) DrainAllQueues() {
+	sessions, err := m.store.ListSessions()
+	if err != nil {
+		return
+	}
+	for _, session := range sessions {
+		_ = m.DrainQueue(session.ID)
+	}
 }
 
 func (m *SessionManager) Write(id, data string) error {
