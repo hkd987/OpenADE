@@ -242,6 +242,36 @@ printf 'TUI_ARGS:%s\n' "$*"
 	}
 }
 
+func TestProjectRootScanFindsRepositoriesAndSkipsDependencyTrees(t *testing.T) {
+	root := t.TempDir()
+	for _, relative := range []string{"team/alpha/.git", "team/beta/.git", "team/node_modules/ignored/.git"} {
+		if err := os.MkdirAll(filepath.Join(root, relative), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	d, err := New(Config{DataDir: t.TempDir(), Addr: "127.0.0.1:0"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.store.Close()
+	body, _ := json.Marshal(map[string]string{"root": root})
+	response := httptest.NewRecorder()
+	d.routes().ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/projects/scan", bytes.NewReader(body)))
+	if response.Code != http.StatusOK {
+		t.Fatalf("scan projects status=%d body=%s", response.Code, response.Body.String())
+	}
+	var payload struct {
+		Projects []string `json:"projects"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{filepath.Join(root, "team", "alpha"), filepath.Join(root, "team", "beta")}
+	if strings.Join(payload.Projects, "|") != strings.Join(want, "|") {
+		t.Fatalf("projects=%q want=%q", payload.Projects, want)
+	}
+}
+
 func TestCompletedCodexSessionCanResumeWithFollowUpMessage(t *testing.T) {
 	repo := createFixtureRepository(t)
 	binDir := t.TempDir()

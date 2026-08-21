@@ -96,6 +96,7 @@ func (d *Daemon) routes() http.Handler {
 	mux.HandleFunc("GET /api/sessions", d.handleListSessions)
 	mux.HandleFunc("POST /api/sessions", d.handleCreateSession)
 	mux.HandleFunc("GET /api/projects", d.handleProjects)
+	mux.HandleFunc("POST /api/projects/scan", d.handleScanProjects)
 	mux.HandleFunc("GET /api/sessions/{id}", d.handleGetSession)
 	mux.HandleFunc("GET /api/sessions/{id}/stream", d.handleStream)
 	mux.HandleFunc("POST /api/sessions/{id}/input", d.handleInput)
@@ -124,6 +125,22 @@ func (d *Daemon) handleProjects(w http.ResponseWriter, _ *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"projects": projects})
+}
+
+func (d *Daemon) handleScanProjects(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Root string `json:"root"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	projects, err := scanProjectRoot(body.Root)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"root": body.Root, "projects": projects})
 }
 
 func cors(next http.Handler) http.Handler {
