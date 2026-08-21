@@ -29,6 +29,19 @@ export interface Session {
   finished_at?: string;
 }
 
+export interface ProjectTerminal {
+  id: string;
+  session_id: string;
+  title: string;
+  cwd: string;
+  status: "running" | "completed" | "failed" | "stopped" | "interrupted";
+  pid?: number;
+  exit_code?: number;
+  created_at: string;
+  updated_at: string;
+  finished_at?: string;
+}
+
 export interface AgentInfo {
   id: string;
   available: boolean;
@@ -135,6 +148,34 @@ export const resizeTerminal = (id: string, rows: number, cols: number) =>
 export const stopSession = (id: string) =>
   request<void>(`/api/sessions/${id}/stop`, { method: "POST" });
 
+export async function listTerminals(sessionId: string): Promise<ProjectTerminal[]> {
+  const payload = await request<{ terminals: ProjectTerminal[] }>(
+    `/api/sessions/${sessionId}/terminals`,
+  );
+  return payload.terminals ?? [];
+}
+
+export const createTerminal = (sessionId: string, title?: string) =>
+  request<ProjectTerminal>(`/api/sessions/${sessionId}/terminals`, {
+    method: "POST",
+    body: JSON.stringify({ title: title ?? "" }),
+  });
+
+export const sendTerminalInput = (id: string, data: string) =>
+  request<void>(`/api/terminals/${id}/input`, {
+    method: "POST",
+    body: JSON.stringify({ data }),
+  });
+
+export const resizeProjectTerminal = (id: string, rows: number, cols: number) =>
+  request<void>(`/api/terminals/${id}/resize`, {
+    method: "POST",
+    body: JSON.stringify({ rows, cols }),
+  });
+
+export const stopTerminal = (id: string) =>
+  request<void>(`/api/terminals/${id}/stop`, { method: "POST" });
+
 export async function getDiff(id: string): Promise<string> {
   return (await request<{ diff: string }>(`/api/sessions/${id}/diff`)).diff;
 }
@@ -173,6 +214,10 @@ export const getTicket = (key: string) =>
 
 export function streamURL(id: string): string {
   return `${DAEMON_URL.replace(/^http/, "ws")}/api/sessions/${id}/stream`;
+}
+
+export function terminalStreamURL(id: string): string {
+  return `${DAEMON_URL.replace(/^http/, "ws")}/api/terminals/${id}/stream`;
 }
 
 export function projectName(path: string): string {
