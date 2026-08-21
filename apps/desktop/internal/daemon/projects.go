@@ -77,6 +77,7 @@ func scanProjectRoot(root string) ([]string, error) {
 
 func discoverExternalConversations(root string, projects []string) []ExternalConversation {
 	home, _ := os.UserHomeDir()
+	codexTitles := codexConversationTitles(home)
 	type candidate struct {
 		path, provider string
 		updated        time.Time
@@ -114,6 +115,9 @@ func discoverExternalConversations(root string, projects []string) []ExternalCon
 		if !ok || !pathWithin(root, conversation.Cwd) {
 			continue
 		}
+		if item.provider == "codex" && codexTitles[conversation.ID] != "" {
+			conversation.Title = codexTitles[conversation.ID]
+		}
 		conversation.ProjectRoot = matchingProject(conversation.Cwd, projects)
 		if conversation.ProjectRoot == "" {
 			continue
@@ -131,6 +135,41 @@ func discoverExternalConversations(root string, projects []string) []ExternalCon
 	return conversations
 }
 
+func codexConversationTitles(home string) map[string]string {
+	titles := map[string]string{}
+	readConversationIndex(filepath.Join(home, ".codex", "session_index.jsonl"), func(event map[string]any) {
+		id, _ := event["id"].(string)
+		title, _ := event["thread_name"].(string)
+		if cleaned := cleanConversationTitle(title); id != "" && cleaned != "" {
+			titles[id] = cleaned
+		}
+	})
+	readConversationIndex(filepath.Join(home, ".codex", "history.jsonl"), func(event map[string]any) {
+		id, _ := event["session_id"].(string)
+		text, _ := event["text"].(string)
+		if cleaned := cleanConversationTitle(text); id != "" && titles[id] == "" && cleaned != "" {
+			titles[id] = cleaned
+		}
+	})
+	return titles
+}
+
+func readConversationIndex(path string, visit func(map[string]any)) {
+	file, err := os.Open(path)
+	if err != nil {
+		return
+	}
+	defer file.Close()
+	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 64*1024), 2*1024*1024)
+	for scanner.Scan() {
+		var event map[string]any
+		if json.Unmarshal(scanner.Bytes(), &event) == nil {
+			visit(event)
+		}
+	}
+}
+
 func readExternalConversation(path, provider string, updated time.Time) (ExternalConversation, bool) {
 	file, err := os.Open(path)
 	if err != nil {
@@ -145,6 +184,9 @@ func readExternalConversation(path, provider string, updated time.Time) (Externa
 		if json.Unmarshal(scanner.Bytes(), &event) != nil {
 			continue
 		}
+		if provider == "claude" && event["isSidechain"] == true {
+			return ExternalConversation{}, false
+		}
 		if provider == "codex" {
 			parseCodexConversationEvent(event, &conversation)
 		} else {
@@ -154,10 +196,7 @@ func readExternalConversation(path, provider string, updated time.Time) (Externa
 			return conversation, true
 		}
 	}
-	if conversation.Title == "" {
-		conversation.Title = "Previous conversation"
-	}
-	return conversation, conversation.ID != "" && conversation.Cwd != ""
+	return conversation, conversation.ID != "" && conversation.Cwd != "" && conversation.Title != ""
 }
 
 func parseCodexConversationEvent(event map[string]any, conversation *ExternalConversation) {
@@ -180,6 +219,9 @@ func parseClaudeConversationEvent(event map[string]any, conversation *ExternalCo
 	}
 	if cwd, ok := event["cwd"].(string); ok && cwd != "" {
 		conversation.Cwd = cwd
+	}
+	if title, ok := event["customTitle"].(string); ok && strings.TrimSpace(title) != "" {
+		conversation.Title = cleanConversationTitle(title)
 	}
 	if conversation.Title == "" && event["type"] == "user" {
 		message, _ := event["message"].(map[string]any)
@@ -212,10 +254,11 @@ func cleanConversationTitle(value string) string {
 	value = strings.TrimSpace(strings.ReplaceAll(value, "\n", " "))
 	value = strings.Join(strings.Fields(value), " ")
 	if strings.HasPrefix(value, "<") || value == "" {
-		return "Previous conversation"
+		return ""
 	}
-	if len(value) > 84 {
-		return value[:81] + "…"
+	runes := []rune(value)
+	if len(runes) > 84 {
+		return string(runes[:81]) + "…"
 	}
 	return value
 }

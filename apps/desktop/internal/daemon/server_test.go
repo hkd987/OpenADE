@@ -290,6 +290,21 @@ func TestProjectRootScanIncludesLocalProviderConversations(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(codexDir, "session.jsonl"), []byte(history), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.MkdirAll(filepath.Join(home, ".codex"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".codex", "session_index.jsonl"), []byte(`{"id":"existing-codex-session","thread_name":"Indexed parser cleanup"}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	claudeDir := filepath.Join(home, ".claude", "projects", "fixture")
+	if err := os.MkdirAll(claudeDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	claudeHistory := `{"type":"user","sessionId":"existing-claude-session","cwd":` + fmt.Sprintf("%q", repo) + `,"isSidechain":false,"message":{"content":"<scheduled-task name=\"daily-digest\">context</scheduled-task>"}}` + "\n" +
+		`{"type":"custom-title","sessionId":"existing-claude-session","customTitle":"Daily project digest"}` + "\n"
+	if err := os.WriteFile(filepath.Join(claudeDir, "session.jsonl"), []byte(claudeHistory), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	d, err := New(Config{DataDir: t.TempDir(), Addr: "127.0.0.1:0"})
 	if err != nil {
 		t.Fatal(err)
@@ -304,7 +319,14 @@ func TestProjectRootScanIncludesLocalProviderConversations(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
 		t.Fatal(err)
 	}
-	if len(payload.Conversations) != 1 || payload.Conversations[0].ID != "existing-codex-session" || payload.Conversations[0].ProjectRoot != repo || payload.Conversations[0].Title != "Finish the imported parser cleanup" {
+	if len(payload.Conversations) != 2 {
+		t.Fatalf("conversations=%+v", payload.Conversations)
+	}
+	byID := map[string]ExternalConversation{}
+	for _, conversation := range payload.Conversations {
+		byID[conversation.ID] = conversation
+	}
+	if byID["existing-codex-session"].ProjectRoot != repo || byID["existing-codex-session"].Title != "Indexed parser cleanup" || byID["existing-claude-session"].Title != "Daily project digest" {
 		t.Fatalf("conversations=%+v", payload.Conversations)
 	}
 }
