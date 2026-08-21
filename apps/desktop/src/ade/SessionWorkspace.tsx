@@ -63,7 +63,7 @@ export function SessionWorkspace({ session, preferences, onBack, onRefresh }: { 
       }
     };
     return () => socket.close();
-  }, [defaultTab, session.id]);
+  }, [session.id, streamVersion]);
 
   useEffect(() => {
     outputRef.current?.scrollTo({ top: outputRef.current.scrollHeight, behavior: "smooth" });

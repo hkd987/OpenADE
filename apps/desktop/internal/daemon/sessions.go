@@ -365,7 +365,10 @@ func (m *SessionManager) Subscribe(id string) ([]byte, <-chan []byte, func(), er
 	}
 	ch := make(chan []byte, 128)
 	live.mu.Lock()
-	initial := append([]byte(nil), live.scrollback...)
+	initial, readErr := os.ReadFile(filepath.Join(m.dataDir, "transcripts", id+".log"))
+	if readErr != nil {
+		initial = append([]byte(nil), live.scrollback...)
+	}
 	live.subscribers[ch] = struct{}{}
 	live.mu.Unlock()
 	cancel := func() {

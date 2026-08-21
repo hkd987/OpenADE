@@ -158,6 +158,14 @@ printf '{"type":"item.completed","item":{"type":"agent_message","text":"%s"}}\n'
 	if messageResponse.Code != http.StatusAccepted {
 		t.Fatalf("message status=%d body=%s", messageResponse.Code, messageResponse.Body.String())
 	}
+	replay, _, cancel, err := d.sessions.Subscribe(created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+	if !strings.Contains(string(replay), "first turn") || !strings.Contains(string(replay), "follow-up turn") {
+		t.Fatalf("resumed stream did not replay the full conversation: %s", replay)
+	}
 	deadline = time.Now().Add(3 * time.Second)
 	var transcript []byte
 	for time.Now().Before(deadline) {
