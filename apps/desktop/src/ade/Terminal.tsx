@@ -24,9 +24,16 @@ export function TerminalWorkspace({ session }: { session: Session }) {
   const [hidden, setHidden] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const mountedRef = useRef(false);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
 
   const refresh = useCallback(async () => {
     const next = await listTerminals(sessionId);
+    if (!mountedRef.current) return;
     setTerminals(next);
     setActiveId((current) => current ?? next.find((item) => item.status === "running")?.id ?? null);
   }, [sessionId]);
@@ -41,12 +48,13 @@ export function TerminalWorkspace({ session }: { session: Session }) {
     setError(null);
     try {
       const terminal = await createTerminal(sessionId);
+      if (!mountedRef.current) return;
       setTerminals((current) => [...current, terminal]);
       setActiveId(terminal.id);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason));
+      if (mountedRef.current) setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
-      setBusy(false);
+      if (mountedRef.current) setBusy(false);
     }
   };
 
@@ -55,17 +63,19 @@ export function TerminalWorkspace({ session }: { session: Session }) {
     setError(null);
     try {
       const terminal = await createTerminal(sessionId, { kind: "agent", agent: session.agent, resume: true });
+      if (!mountedRef.current) return;
       setTerminals((current) => [...current, terminal]);
       setActiveId(terminal.id);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason));
+      if (mountedRef.current) setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
-      setBusy(false);
+      if (mountedRef.current) setBusy(false);
     }
   };
 
   const closeTerminal = async (terminal: ProjectTerminal) => {
     if (terminal.status === "running") await stopTerminal(terminal.id).catch(() => undefined);
+    if (!mountedRef.current) return;
     setHidden((current) => new Set(current).add(terminal.id));
     setActiveId((current) => current === terminal.id ? null : current);
   };
@@ -115,6 +125,11 @@ export function DirectTUIWorkspace({ session, onRefresh }: { session: Session; o
   const active = ["starting", "running", "waiting"].includes(session.status);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const mountedRef = useRef(false);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
   const resume = async () => {
     setBusy(true);
     setError(null);
@@ -122,9 +137,9 @@ export function DirectTUIWorkspace({ session, onRefresh }: { session: Session; o
       await resumeTUI(session.id);
       await onRefresh();
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason));
+      if (mountedRef.current) setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
-      setBusy(false);
+      if (mountedRef.current) setBusy(false);
     }
   };
   return <section className={`direct-tui-workspace ${error ? "with-error" : ""}`}>
@@ -175,9 +190,10 @@ function TerminalHost({ terminal: projectTerminal }: { terminal: ProjectTerminal
     });
 
     return () => {
+      socket.onmessage = null;
+      socket.close();
       stopSizing();
       input.dispose();
-      socket.close();
       terminal.dispose();
     };
   }, [projectTerminal.id, projectTerminal.status]);
@@ -214,7 +230,13 @@ function TerminalSurface({ id, title, running, socketURL, onInput, onResize }: {
     socket.onmessage = (event) => { const message = JSON.parse(String(event.data)) as { type: string; data?: string }; if (message.type === "output" && message.data) terminal.write(message.data); };
     const stopSizing = observeTerminalSize(host, terminal, fit, (rows, cols) => running ? onResize(rows, cols) : Promise.resolve());
     const input = terminal.onData((data) => { void onInput(data).catch(() => undefined); });
-    return () => { stopSizing(); input.dispose(); socket.close(); terminal.dispose(); };
+    return () => {
+      socket.onmessage = null;
+      socket.close();
+      stopSizing();
+      input.dispose();
+      terminal.dispose();
+    };
   }, [id, onInput, onResize, running, socketURL]);
   return <div className="terminal-host direct-tui-host" ref={hostRef} aria-label={`${title} in project worktree`} />;
 }

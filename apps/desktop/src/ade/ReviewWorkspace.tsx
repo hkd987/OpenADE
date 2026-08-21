@@ -18,10 +18,19 @@ export function ReviewWorkspace({ sessionId }: { sessionId: string }) {
   const changed = useMemo(() => parseUnifiedDiff(diff), [diff]);
 
   useEffect(() => {
+    let stale = false;
     setError(null);
+    setSelected(null);
     void Promise.all([getDiff(sessionId), getFiles(sessionId)])
-      .then(([nextDiff, nextFiles]) => { setDiff(nextDiff); setFiles(nextFiles); })
-      .catch((reason) => setError(reason instanceof Error ? reason.message : String(reason)));
+      .then(([nextDiff, nextFiles]) => {
+        if (stale) return;
+        setDiff(nextDiff);
+        setFiles(nextFiles);
+      })
+      .catch((reason) => {
+        if (!stale) setError(reason instanceof Error ? reason.message : String(reason));
+      });
+    return () => { stale = true; };
   }, [sessionId]);
 
   useEffect(() => {

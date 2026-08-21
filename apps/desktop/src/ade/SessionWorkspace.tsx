@@ -54,10 +54,20 @@ export function SessionWorkspace({ session, preferences, onBack, onRefresh }: { 
   const [queuedMessages, setQueuedMessages] = useState<QueuedMessage[]>([]);
   const outputRef = useRef<HTMLDivElement>(null);
   const reconnectStreamRef = useRef(false);
+  const mountedRef = useRef(false);
+  const focusTimerRef = useRef<number | undefined>(undefined);
   const active = ["running", "starting", "waiting"].includes(session.status);
   const resumable = ["claude", "claude-code", "codex", "codex-cli"].includes(session.agent) && !active;
   const chatCapable = session.agent !== "shell" && !tuiMode;
   const canMessage = chatCapable && (active || resumable);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      if (focusTimerRef.current !== undefined) window.clearTimeout(focusTimerRef.current);
+    };
+  }, []);
 
   useEffect(() => {
     setTab(defaultTab);
@@ -69,7 +79,8 @@ export function SessionWorkspace({ session, preferences, onBack, onRefresh }: { 
   const refreshQueue = useCallback(async () => {
     if (!chatCapable) return;
     try {
-      setQueuedMessages(await listMessageQueue(session.id));
+      const next = await listMessageQueue(session.id);
+      if (mountedRef.current) setQueuedMessages(next);
     } catch {
       // The session refresh loop will surface daemon connectivity errors globally.
     }
@@ -77,9 +88,17 @@ export function SessionWorkspace({ session, preferences, onBack, onRefresh }: { 
 
   useEffect(() => {
     if (!chatCapable) return;
-    void refreshQueue();
-    const timer = window.setInterval(() => void refreshQueue(), 800);
-    return () => window.clearInterval(timer);
+    let stopped = false;
+    let timer: number | undefined;
+    const poll = async () => {
+      await refreshQueue();
+      if (!stopped) timer = window.setTimeout(() => void poll(), 800);
+    };
+    void poll();
+    return () => {
+      stopped = true;
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
   }, [chatCapable, refreshQueue]);
 
   useEffect(() => {
@@ -87,10 +106,12 @@ export function SessionWorkspace({ session, preferences, onBack, onRefresh }: { 
   }, [active, queuedMessages.length]);
 
   useEffect(() => {
-    if (tuiMode) return;
+    if (tuiMode || !chatCapable) return;
     let disposed = false;
+    let reconnectTimer: number | undefined;
     const socket = new WebSocket(streamURL(session.id));
     socket.onmessage = (event) => {
+      if (disposed) return;
       const message = JSON.parse(String(event.data)) as { type: string; data?: string };
       if (message.type === "output" && message.data) {
         setOutput((current) => (current + message.data!).slice(-2_000_000));
@@ -98,20 +119,29 @@ export function SessionWorkspace({ session, preferences, onBack, onRefresh }: { 
     };
     socket.onclose = () => {
       if (!disposed && reconnectStreamRef.current) {
-        window.setTimeout(() => setStreamVersion((current) => current + 1), 250);
+        reconnectTimer = window.setTimeout(() => {
+          if (!disposed) setStreamVersion((current) => current + 1);
+        }, 250);
       }
     };
     return () => {
       disposed = true;
+      if (reconnectTimer !== undefined) window.clearTimeout(reconnectTimer);
+      socket.onmessage = null;
+      socket.onclose = null;
       socket.close();
     };
-  }, [session.id, streamVersion, tuiMode]);
+  }, [chatCapable, session.id, streamVersion, tuiMode]);
 
   useEffect(() => setOutput(""), [session.id]);
 
   useEffect(() => {
     if (!chatCapable) return;
-    void listAgentCommands(session.id).then(setCommands).catch(() => setCommands([]));
+    let stale = false;
+    void listAgentCommands(session.id)
+      .then((next) => { if (!stale) setCommands(next); })
+      .catch(() => { if (!stale) setCommands([]); });
+    return () => { stale = true; };
   }, [chatCapable, session.id]);
 
   useEffect(() => {
@@ -119,10 +149,22 @@ export function SessionWorkspace({ session, preferences, onBack, onRefresh }: { 
   }, [output]);
 
   useEffect(() => {
+    let stale = false;
     if (tab === "ticket" && session.ticket_key && !ticket) {
-      void getTicket(session.ticket_key).then(setTicket).catch((reason) => setPanelError(String(reason)));
+      void getTicket(session.ticket_key)
+        .then((next) => { if (!stale) setTicket(next); })
+        .catch((reason) => { if (!stale) setPanelError(String(reason)); });
     }
+    return () => { stale = true; };
   }, [session.ticket_key, tab, ticket]);
+
+  const focusComposer = () => {
+    if (focusTimerRef.current !== undefined) window.clearTimeout(focusTimerRef.current);
+    focusTimerRef.current = window.setTimeout(() => {
+      focusTimerRef.current = undefined;
+      document.querySelector<HTMLTextAreaElement>(".session-composer textarea")?.focus();
+    }, 0);
+  };
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -170,7 +212,7 @@ export function SessionWorkspace({ session, preferences, onBack, onRefresh }: { 
     if (!selected) return;
     setQueuedMessages((current) => current.filter((item) => item.id !== id));
     setInput(selected.text);
-    window.setTimeout(() => document.querySelector<HTMLTextAreaElement>(".session-composer textarea")?.focus(), 0);
+    focusComposer();
     try {
       await removeQueuedMessageRequest(session.id, id);
     } catch (reason) {
@@ -183,7 +225,7 @@ export function SessionWorkspace({ session, preferences, onBack, onRefresh }: { 
   const insertCommand = (command: AgentCommand) => {
     setInput(`${command.invocation} `);
     setCommandOpen(false);
-    window.setTimeout(() => document.querySelector<HTMLTextAreaElement>(".session-composer textarea")?.focus(), 0);
+    focusComposer();
   };
 
   const createPR = async () => {

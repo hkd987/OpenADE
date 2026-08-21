@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -71,11 +72,10 @@ func (m *TerminalManager) Create(session Session, title string, launches ...Term
 		Status: "running", PID: cmd.Process.Pid, CreatedAt: now, UpdatedAt: now,
 	}
 	if err := m.store.CreateTerminal(terminal); err != nil {
-		_ = ptmx.Close()
-		_ = cmd.Process.Kill()
+		terminateUnmanagedProcess(newLiveSession(ptmx, cmd))
 		return TerminalSession{}, err
 	}
-	live := &liveSession{pty: ptmx, cmd: cmd, subscribers: make(map[chan []byte]struct{})}
+	live := newLiveSession(ptmx, cmd)
 	m.mu.Lock()
 	m.live[terminal.ID] = live
 	m.mu.Unlock()
@@ -146,6 +146,7 @@ func agentDisplayName(agent, fallback string) string {
 }
 
 func (m *TerminalManager) readOutput(id string, live *liveSession, transcript *os.File) {
+	defer close(live.readDone)
 	reader := bufio.NewReaderSize(live.pty, 32*1024)
 	buf := make([]byte, 8192)
 	for {
@@ -176,6 +177,9 @@ func (m *TerminalManager) readOutput(id string, live *liveSession, transcript *o
 
 func (m *TerminalManager) wait(id string, live *liveSession, transcript *os.File) {
 	err := live.cmd.Wait()
+	_ = signalProcessGroup(live, syscall.SIGTERM)
+	_ = live.pty.Close()
+	<-live.readDone
 	code := 0
 	status := "completed"
 	m.mu.Lock()
@@ -202,6 +206,7 @@ func (m *TerminalManager) wait(id string, live *liveSession, transcript *os.File
 	}
 	live.subscribers = make(map[chan []byte]struct{})
 	live.mu.Unlock()
+	close(live.done)
 }
 
 func (m *TerminalManager) Write(id, data string) error {
@@ -236,7 +241,24 @@ func (m *TerminalManager) Stop(id string) error {
 	if live.cmd.Process == nil {
 		return nil
 	}
-	return live.cmd.Process.Signal(syscall.SIGTERM)
+	if err := signalProcessGroup(live, syscall.SIGTERM); err != nil {
+		m.mu.Lock()
+		delete(m.stopping, id)
+		m.mu.Unlock()
+		return err
+	}
+	return nil
+}
+
+func (m *TerminalManager) Shutdown(ctx context.Context) {
+	m.mu.Lock()
+	lives := make([]*liveSession, 0, len(m.live))
+	for id, live := range m.live {
+		m.stopping[id] = true
+		lives = append(lives, live)
+	}
+	m.mu.Unlock()
+	shutdownLiveProcesses(ctx, lives)
 }
 
 func (m *TerminalManager) Subscribe(id string) ([]byte, <-chan []byte, func(), error) {

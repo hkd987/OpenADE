@@ -1,7 +1,7 @@
-import { render, screen, within } from "@testing-library/react";
+import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { enqueueMessage, Session } from "./api";
+import { enqueueMessage, listMessageQueue, Session } from "./api";
 import { SessionWorkspace } from "./SessionWorkspace";
 import { Preferences } from "./preferences";
 
@@ -67,22 +67,67 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   localStorage.clear();
   vi.clearAllMocks();
   vi.unstubAllGlobals();
 });
 
 function stubSessionRuntime() {
+  const sockets: FakeWebSocket[] = [];
   class FakeWebSocket {
     onmessage: ((event: MessageEvent) => void) | null = null;
     onclose: (() => void) | null = null;
     close = vi.fn();
+    constructor() { sockets.push(this); }
   }
   vi.stubGlobal("WebSocket", FakeWebSocket);
   HTMLElement.prototype.scrollTo = vi.fn();
+  return sockets;
 }
 
 describe("Session workspace inspector", () => {
+  it("does not open a chat stream for shell-only sessions", () => {
+    const sockets = stubSessionRuntime();
+    render(<SessionWorkspace session={{ ...session, agent: "shell" }} preferences={preferences} onBack={vi.fn()} onRefresh={vi.fn().mockResolvedValue(undefined)} />);
+    expect(sockets).toHaveLength(0);
+  });
+
+  it("serializes queue polling while a daemon request is pending", async () => {
+    vi.useFakeTimers();
+    let resolveQueue!: (messages: Awaited<ReturnType<typeof listMessageQueue>>) => void;
+    vi.mocked(listMessageQueue).mockImplementationOnce(() => new Promise((resolve) => {
+      resolveQueue = resolve;
+    }));
+    stubSessionRuntime();
+    const view = render(<SessionWorkspace session={{ ...session, status: "running" }} preferences={preferences} onBack={vi.fn()} onRefresh={vi.fn().mockResolvedValue(undefined)} />);
+
+    expect(listMessageQueue).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_400);
+    });
+    expect(listMessageQueue).toHaveBeenCalledTimes(1);
+    view.unmount();
+    await act(async () => {
+      resolveQueue([]);
+      await Promise.resolve();
+      await vi.runAllTimersAsync();
+    });
+    expect(listMessageQueue).toHaveBeenCalledTimes(1);
+  });
+
+  it("clears a pending stream reconnect when the workspace closes", () => {
+    vi.useFakeTimers();
+    const sockets = stubSessionRuntime();
+    const view = render(<SessionWorkspace session={{ ...session, status: "running" }} preferences={preferences} onBack={vi.fn()} onRefresh={vi.fn().mockResolvedValue(undefined)} />);
+    expect(sockets).toHaveLength(1);
+    act(() => sockets[0].onclose?.());
+    expect(vi.getTimerCount()).toBeGreaterThan(0);
+
+    view.unmount();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("keeps work surfaces in a right rail and toggles one inspector panel", async () => {
     stubSessionRuntime();
     const user = userEvent.setup();

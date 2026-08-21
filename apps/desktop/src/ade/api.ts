@@ -1,4 +1,8 @@
-export const DAEMON_URL = "http://127.0.0.1:7433";
+const frontendEnv = (import.meta as ImportMeta & {
+  env?: { VITE_OPENADE_DAEMON_URL?: string };
+}).env;
+
+export const DAEMON_URL = frontendEnv?.VITE_OPENADE_DAEMON_URL ?? "http://127.0.0.1:7433";
 
 export type SessionStatus =
   | "starting"

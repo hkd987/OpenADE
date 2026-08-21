@@ -1,5 +1,5 @@
 import { Check, Copy } from "@phosphor-icons/react";
-import { isValidElement, ReactNode, useState } from "react";
+import { isValidElement, ReactNode, useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
@@ -28,16 +28,30 @@ export function MarkdownMessage({ children }: { children: string }) {
 
 function CodeBlock({ children }: { children: ReactNode }) {
   const [copied, setCopied] = useState(false);
+  const copyTimerRef = useRef<number | undefined>(undefined);
+  const mountedRef = useRef(false);
   const text = textContent(children).replace(/\n$/, "");
   const className = isValidElement<{ className?: string }>(children)
     ? children.props.className ?? ""
     : "";
   const language = className.match(/language-([\w-]+)/)?.[1] ?? "code";
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      if (copyTimerRef.current !== undefined) window.clearTimeout(copyTimerRef.current);
+    };
+  }, []);
 
   const copy = async () => {
     await navigator.clipboard.writeText(text);
+    if (!mountedRef.current) return;
     setCopied(true);
-    window.setTimeout(() => setCopied(false), 1200);
+    if (copyTimerRef.current !== undefined) window.clearTimeout(copyTimerRef.current);
+    copyTimerRef.current = window.setTimeout(() => {
+      copyTimerRef.current = undefined;
+      setCopied(false);
+    }, 1200);
   };
 
   return (

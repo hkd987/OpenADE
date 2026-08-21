@@ -66,12 +66,17 @@ export default function prepareWorld() {
     const shim = path.join(bin, name);
     fs.writeFileSync(
       shim,
-      `#!/bin/sh\n` +
+        `#!/bin/sh\n` +
         `echo "${name}-shim started in $(basename "$(pwd)")"\n` +
         `echo "args: $@"\n` +
-        `while read line; do\n` +
-        `  echo "got:$line"\n` +
-        `  [ "$line" = "exit" ] && exit 0\n` +
+        `trap 'exit 0' TERM INT\n` +
+        `while :; do\n` +
+        `  if IFS= read -r line; then\n` +
+        `    echo "got:$line"\n` +
+        `    [ "$line" = "exit" ] && exit 0\n` +
+        `  else\n` +
+        `    sleep 0.1\n` +
+        `  fi\n` +
         `done\n`,
     );
     fs.chmodSync(shim, 0o755);

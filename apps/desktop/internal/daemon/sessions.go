@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -38,6 +39,8 @@ type liveSession struct {
 	cmd         *exec.Cmd
 	scrollback  []byte
 	subscribers map[chan []byte]struct{}
+	readDone    chan struct{}
+	done        chan struct{}
 }
 
 type SessionManager struct {
@@ -189,14 +192,14 @@ func (m *SessionManager) launchCommand(session Session, program string, args []s
 	if err != nil {
 		return fmt.Errorf("start %s: %w", session.Agent, err)
 	}
-	live := &liveSession{pty: ptmx, cmd: cmd, subscribers: make(map[chan []byte]struct{})}
+	live := newLiveSession(ptmx, cmd)
+	if err := m.store.UpdateRuntime(session.ID, "running", cmd.Process.Pid, nil); err != nil {
+		terminateUnmanagedProcess(live)
+		return err
+	}
 	m.mu.Lock()
 	m.live[session.ID] = live
 	m.mu.Unlock()
-	if err := m.store.UpdateRuntime(session.ID, "running", cmd.Process.Pid, nil); err != nil {
-		_ = ptmx.Close()
-		return err
-	}
 	transcriptDir := filepath.Join(m.dataDir, "transcripts")
 	_ = os.MkdirAll(transcriptDir, 0o755)
 	transcript, _ := os.OpenFile(filepath.Join(transcriptDir, session.ID+".log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
@@ -534,6 +537,7 @@ func resolveProgram(name string) (string, error) {
 }
 
 func (m *SessionManager) readOutput(id string, live *liveSession, transcript *os.File) {
+	defer close(live.readDone)
 	reader := bufio.NewReaderSize(live.pty, 32*1024)
 	buf := make([]byte, 8192)
 	for {
@@ -564,6 +568,11 @@ func (m *SessionManager) readOutput(id string, live *liveSession, transcript *os
 
 func (m *SessionManager) wait(id string, live *liveSession, transcript *os.File) {
 	err := live.cmd.Wait()
+	// The agent may have left background children in its process group. Once the
+	// group leader exits, terminate any stragglers before releasing the PTY.
+	_ = signalProcessGroup(live, syscall.SIGTERM)
+	_ = live.pty.Close()
+	<-live.readDone
 	code := 0
 	status := "completed"
 	if err != nil {
@@ -587,6 +596,7 @@ func (m *SessionManager) wait(id string, live *liveSession, transcript *os.File)
 	}
 	live.subscribers = make(map[chan []byte]struct{})
 	live.mu.Unlock()
+	close(live.done)
 	if status == "completed" {
 		go func() { _ = m.DrainQueue(id) }()
 	}
@@ -654,7 +664,17 @@ func (m *SessionManager) Stop(id string) error {
 	if live.cmd.Process == nil {
 		return nil
 	}
-	return live.cmd.Process.Signal(syscall.SIGTERM)
+	return signalProcessGroup(live, syscall.SIGTERM)
+}
+
+func (m *SessionManager) Shutdown(ctx context.Context) {
+	m.mu.RLock()
+	lives := make([]*liveSession, 0, len(m.live))
+	for _, live := range m.live {
+		lives = append(lives, live)
+	}
+	m.mu.RUnlock()
+	shutdownLiveProcesses(ctx, lives)
 }
 
 func (m *SessionManager) Subscribe(id string) ([]byte, <-chan []byte, func(), error) {
@@ -695,4 +715,73 @@ func (m *SessionManager) getLive(id string) (*liveSession, error) {
 		return nil, fmt.Errorf("session %s is not running", id)
 	}
 	return live, nil
+}
+
+func newLiveSession(ptmx *os.File, cmd *exec.Cmd) *liveSession {
+	return &liveSession{
+		pty:         ptmx,
+		cmd:         cmd,
+		subscribers: make(map[chan []byte]struct{}),
+		readDone:    make(chan struct{}),
+		done:        make(chan struct{}),
+	}
+}
+
+func terminateUnmanagedProcess(live *liveSession) {
+	_ = signalProcessGroup(live, syscall.SIGKILL)
+	_ = live.pty.Close()
+	_ = live.cmd.Wait()
+}
+
+func signalProcessGroup(live *liveSession, signal syscall.Signal) error {
+	if live == nil || live.cmd == nil || live.cmd.Process == nil {
+		return nil
+	}
+	err := syscall.Kill(-live.cmd.Process.Pid, signal)
+	if err == nil || errors.Is(err, syscall.ESRCH) {
+		return nil
+	}
+	return live.cmd.Process.Signal(signal)
+}
+
+func shutdownLiveProcesses(ctx context.Context, lives []*liveSession) {
+	for _, live := range lives {
+		_ = signalProcessGroup(live, syscall.SIGTERM)
+	}
+	if waitForLiveProcesses(ctx, lives) {
+		return
+	}
+	for _, live := range lives {
+		select {
+		case <-live.done:
+		default:
+			_ = signalProcessGroup(live, syscall.SIGKILL)
+		}
+	}
+	forceCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	_ = waitForLiveProcesses(forceCtx, lives)
+}
+
+func waitForLiveProcesses(ctx context.Context, lives []*liveSession) bool {
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		allDone := true
+		for _, live := range lives {
+			select {
+			case <-live.done:
+			default:
+				allDone = false
+			}
+		}
+		if allDone {
+			return true
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-ticker.C:
+		}
+	}
 }

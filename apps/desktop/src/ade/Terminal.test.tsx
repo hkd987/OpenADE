@@ -18,13 +18,20 @@ const mocks = vi.hoisted(() => {
     terminal.rows = dimensions.rows;
     terminal.cols = dimensions.cols;
   });
+  const inputDispose = vi.fn();
   return {
     dimensions,
     terminal,
     fit,
+    inputDispose,
     resizeTerminal: vi.fn().mockResolvedValue(undefined),
   };
 });
+
+const resources = {
+  sockets: [] as Array<{ onmessage: ((event: MessageEvent) => void) | null; close: ReturnType<typeof vi.fn> }>,
+  observers: [] as Array<{ observe: ReturnType<typeof vi.fn>; disconnect: ReturnType<typeof vi.fn> }>,
+};
 
 vi.mock("@xterm/xterm", () => ({
   Terminal: vi.fn(function Terminal() {
@@ -66,14 +73,19 @@ describe("Direct TUI sizing", () => {
     mocks.dimensions.cols = 100;
     mocks.terminal.rows = 32;
     mocks.terminal.cols = 100;
+    mocks.terminal.onData.mockImplementation(() => ({ dispose: mocks.inputDispose }));
+    resources.sockets.length = 0;
+    resources.observers.length = 0;
 
     class FakeWebSocket {
       onmessage: ((event: MessageEvent) => void) | null = null;
       close = vi.fn();
+      constructor() { resources.sockets.push(this); }
     }
     class FakeResizeObserver {
       observe = vi.fn();
       disconnect = vi.fn();
+      constructor() { resources.observers.push(this); }
     }
     vi.stubGlobal("WebSocket", FakeWebSocket);
     vi.stubGlobal("ResizeObserver", FakeResizeObserver);
@@ -106,5 +118,21 @@ describe("Direct TUI sizing", () => {
 
     expect(mocks.fit).toHaveBeenCalledTimes(2);
     expect(mocks.resizeTerminal).toHaveBeenLastCalledWith("session-1", 48, 156);
+  });
+
+  it("releases every terminal resource when the TUI closes", () => {
+    const view = render(<DirectTUIWorkspace session={session} onRefresh={vi.fn().mockResolvedValue(undefined)} />);
+    const socket = resources.sockets[0];
+    const observer = resources.observers[0];
+    expect(socket.onmessage).toBeTypeOf("function");
+
+    view.unmount();
+
+    expect(socket.onmessage).toBeNull();
+    expect(socket.close).toHaveBeenCalledOnce();
+    expect(observer.disconnect).toHaveBeenCalledOnce();
+    expect(mocks.inputDispose).toHaveBeenCalledOnce();
+    expect(mocks.terminal.dispose).toHaveBeenCalledOnce();
+    expect(cancelAnimationFrame).toHaveBeenCalled();
   });
 });

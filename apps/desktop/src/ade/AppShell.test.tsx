@@ -1,8 +1,8 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import AppShell from "./AppShell";
-import { createSession, scanWorkspace, switchSessionSurface } from "./api";
+import { createSession, listSessions, scanWorkspace, switchSessionSurface } from "./api";
 
 vi.mock("./api", async (loadOriginal) => {
   const original = await loadOriginal<typeof import("./api")>();
@@ -37,12 +37,36 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   sessionStorage.clear();
   localStorage.clear();
   vi.unstubAllGlobals();
 });
 
 describe("Tembo-inspired application shell", () => {
+  it("serializes daemon polling and stops scheduling after unmount", async () => {
+    vi.useFakeTimers();
+    let resolveSessions!: (sessions: Awaited<ReturnType<typeof listSessions>>) => void;
+    vi.mocked(listSessions).mockImplementationOnce(() => new Promise((resolve) => {
+      resolveSessions = resolve;
+    }));
+
+    const view = render(<AppShell />);
+    expect(listSessions).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_400);
+    });
+    expect(listSessions).toHaveBeenCalledTimes(1);
+
+    view.unmount();
+    await act(async () => {
+      resolveSessions([]);
+      await Promise.resolve();
+      await vi.runAllTimersAsync();
+    });
+    expect(listSessions).toHaveBeenCalledTimes(1);
+  });
+
   it("presents the task composer and durable-session promise", async () => {
     render(<AppShell />);
     expect(

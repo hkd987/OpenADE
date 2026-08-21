@@ -78,9 +78,15 @@ func (d *Daemon) Run(ctx context.Context) error {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_ = d.server.Shutdown(shutdownCtx)
+		d.terminals.Shutdown(shutdownCtx)
+		d.sessions.Shutdown(shutdownCtx)
 		_ = d.store.Close()
 		return nil
 	case err := <-errCh:
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		d.terminals.Shutdown(shutdownCtx)
+		d.sessions.Shutdown(shutdownCtx)
 		_ = d.store.Close()
 		if errors.Is(err, http.ErrServerClosed) {
 			return nil

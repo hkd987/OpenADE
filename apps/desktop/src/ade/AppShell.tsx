@@ -20,7 +20,7 @@ import {
   Ticket as TicketIcon,
   X,
 } from "@phosphor-icons/react";
-import { FormEvent, useCallback, useEffect, useState } from "react";
+import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import {
   createSession,
   ExternalConversation,
@@ -73,6 +73,16 @@ function AppShell() {
   const [connected, setConnected] = useState(false);
   const [resumingConversationId, setResumingConversationId] = useState<string | null>(null);
   const [switchingSessionId, setSwitchingSessionId] = useState<string | null>(null);
+  const mountedRef = useRef(false);
+  const focusTimerRef = useRef<number | undefined>(undefined);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      if (focusTimerRef.current !== undefined) window.clearTimeout(focusTimerRef.current);
+    };
+  }, []);
 
   const refresh = useCallback(async () => {
     try {
@@ -81,35 +91,50 @@ function AppShell() {
         listProjects(),
         getMeta(),
       ]);
+      if (!mountedRef.current) return;
       setSessions(nextSessions);
       setProjects(nextProjects);
       setMeta(nextMeta);
       setConnected(true);
       setError(null);
     } catch (reason) {
+      if (!mountedRef.current) return;
       setConnected(false);
       setError(reason instanceof Error ? reason.message : String(reason));
     }
   }, []);
 
   useEffect(() => {
-    void refresh();
-    const timer = window.setInterval(() => void refresh(), 1800);
-    return () => window.clearInterval(timer);
+    let stopped = false;
+    let timer: number | undefined;
+    const poll = async () => {
+      await refresh();
+      if (!stopped) timer = window.setTimeout(() => void poll(), 1800);
+    };
+    void poll();
+    return () => {
+      stopped = true;
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
   }, [refresh]);
 
   useEffect(() => {
+    let stale = false;
     if (!preferences.project_root.trim()) {
       setScannedProjects([]);
       setExternalConversations([]);
-      return;
+      return () => { stale = true; };
     }
     void scanWorkspace(preferences.project_root)
       .then((result) => {
+        if (stale) return;
         setScannedProjects(result.projects);
         setExternalConversations(result.conversations);
       })
-      .catch((reason) => setError(reason instanceof Error ? reason.message : String(reason)));
+      .catch((reason) => {
+        if (!stale) setError(reason instanceof Error ? reason.message : String(reason));
+      });
+    return () => { stale = true; };
   }, [preferences.project_root]);
 
   useEffect(() => {
@@ -163,7 +188,11 @@ function AppShell() {
   const openComposer = () => {
     setPage("home");
     setSelectedId(null);
-    window.setTimeout(() => document.querySelector<HTMLTextAreaElement>("[data-main-composer]")?.focus(), 0);
+    if (focusTimerRef.current !== undefined) window.clearTimeout(focusTimerRef.current);
+    focusTimerRef.current = window.setTimeout(() => {
+      focusTimerRef.current = undefined;
+      document.querySelector<HTMLTextAreaElement>("[data-main-composer]")?.focus();
+    }, 0);
   };
   const resumeExternalConversation = async (conversation: ExternalConversation) => {
     if (resumingConversationId) return;
@@ -352,8 +381,13 @@ function ReviewPage({ projects, sessions }: { projects: string[]; sessions: Sess
   useEffect(() => { if (!repo && projects[0]) setRepo(projects[0]); }, [projects, repo]);
   useEffect(() => {
     if (!repo) return;
+    let stale = false;
     setLoading(true); setError(null);
-    void listPullRequests(repo).then(setPRs).catch((reason) => setError(reason instanceof Error ? reason.message : String(reason))).finally(() => setLoading(false));
+    void listPullRequests(repo)
+      .then((next) => { if (!stale) setPRs(next); })
+      .catch((reason) => { if (!stale) setError(reason instanceof Error ? reason.message : String(reason)); })
+      .finally(() => { if (!stale) setLoading(false); });
+    return () => { stale = true; };
   }, [repo]);
   const draft = prs.filter((pr) => pr.isDraft).length;
   const needsReview = prs.filter((pr) => pr.reviewDecision === "REVIEW_REQUIRED").length;

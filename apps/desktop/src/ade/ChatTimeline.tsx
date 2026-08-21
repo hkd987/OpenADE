@@ -8,7 +8,7 @@ import {
   TerminalWindow,
   Wrench,
 } from "@phosphor-icons/react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { relativeTime, Session } from "./api";
 import { ChatActivity, parseChatTranscript } from "./chat-model";
 import { MarkdownMessage } from "./MarkdownMessage";
@@ -57,11 +57,25 @@ function AssistantTurn({
   activityExpanded: boolean;
 }) {
   const [copied, setCopied] = useState(false);
+  const copyTimerRef = useRef<number | undefined>(undefined);
+  const mountedRef = useRef(false);
   const visibleMarkdown = useProgressiveMarkdown(markdown, streaming);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      if (copyTimerRef.current !== undefined) window.clearTimeout(copyTimerRef.current);
+    };
+  }, []);
   const copy = async () => {
     await navigator.clipboard.writeText(markdown);
+    if (!mountedRef.current) return;
     setCopied(true);
-    window.setTimeout(() => setCopied(false), 1200);
+    if (copyTimerRef.current !== undefined) window.clearTimeout(copyTimerRef.current);
+    copyTimerRef.current = window.setTimeout(() => {
+      copyTimerRef.current = undefined;
+      setCopied(false);
+    }, 1200);
   };
   return (
     <article className="chat-assistant-turn">
