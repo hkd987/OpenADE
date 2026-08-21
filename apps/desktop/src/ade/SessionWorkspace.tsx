@@ -27,11 +27,13 @@ import {
 import { ChatTimeline } from "./ChatTimeline";
 import { ReviewWorkspace } from "./ReviewWorkspace";
 import { TerminalWorkspace } from "./Terminal";
+import { Preferences } from "./preferences";
 
 type WorkTab = "review" | "terminal" | "pull-request" | "ticket";
 
-export function SessionWorkspace({ session, onBack, onRefresh }: { session: Session; onBack: () => void; onRefresh: () => Promise<void> }) {
-  const [tab, setTab] = useState<WorkTab>("review");
+export function SessionWorkspace({ session, preferences, onBack, onRefresh }: { session: Session; preferences: Preferences; onBack: () => void; onRefresh: () => Promise<void> }) {
+  const defaultTab: WorkTab = preferences.session_surface === "terminal" ? "terminal" : "review";
+  const [tab, setTab] = useState<WorkTab>(defaultTab);
   const [rightOpen, setRightOpen] = useState(true);
   const [ticket, setTicket] = useState<Ticket | null>(null);
   const [panelError, setPanelError] = useState<string | null>(null);
@@ -45,7 +47,7 @@ export function SessionWorkspace({ session, onBack, onRefresh }: { session: Sess
   const canMessage = active || resumable;
 
   useEffect(() => {
-    setTab("review");
+    setTab(defaultTab);
     setRightOpen(true);
     setPanelError(null);
     setTicket(null);
@@ -61,7 +63,7 @@ export function SessionWorkspace({ session, onBack, onRefresh }: { session: Sess
       }
     };
     return () => socket.close();
-  }, [session.id]);
+  }, [defaultTab, session.id]);
 
   useEffect(() => {
     outputRef.current?.scrollTo({ top: outputRef.current.scrollHeight, behavior: "smooth" });

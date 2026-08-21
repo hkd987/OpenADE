@@ -1,7 +1,6 @@
 import {
   Pulse,
   ArrowUp,
-  CaretDown,
   Check,
   Code,
   Columns,
@@ -12,20 +11,17 @@ import {
   GitBranch,
   GitDiff,
   GithubLogo,
-  House,
   Lightning,
   ListMagnifyingGlass,
-  Moon,
   Plus,
   Robot,
   SidebarSimple,
   SpinnerGap,
-  Sun,
   TerminalWindow,
   Ticket as TicketIcon,
   X,
 } from "@phosphor-icons/react";
-import { FormEvent, ReactNode, useCallback, useEffect, useState } from "react";
+import { FormEvent, useCallback, useEffect, useState } from "react";
 import {
   createSession,
   getMeta,
@@ -39,8 +35,9 @@ import {
   Session,
 } from "./api";
 import { SessionWorkspace } from "./SessionWorkspace";
-
-type Page = "home" | "sessions" | "agents" | "review";
+import { loadPreferences, Preferences, savePreferences, themeClass } from "./preferences";
+import { SettingsPage } from "./SettingsPage";
+import { Page, Sidebar } from "./Sidebar";
 
 const agents = [
   { id: "claude", label: "Claude Code" },
@@ -66,7 +63,7 @@ function AppShell() {
   const [meta, setMeta] = useState<Meta | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [dark, setDark] = useState(true);
+  const [preferences, setPreferences] = useState<Preferences>(loadPreferences);
   const [error, setError] = useState<string | null>(null);
   const [connected, setConnected] = useState(false);
 
@@ -111,69 +108,45 @@ function AppShell() {
     setSelectedId(id);
     setPage("sessions");
   };
+  const updatePreferences = (next: Preferences) => {
+    setPreferences(next);
+    savePreferences(next);
+  };
+  const openPage = (next: Page) => {
+    setPage(next);
+    setSelectedId(null);
+  };
 
   return (
-    <div className={`ade ${dark ? "theme-dark" : "theme-light"} ${sidebarOpen ? "" : "sidebar-collapsed"}`}>
-      <aside className="sidebar">
-        <div className="workspace-switcher">
-          <div className="workspace-mark">O</div>
-          <span>OpenADE workspace</span>
-          <CaretDown size={12} weight="bold" />
-          <button className="icon-button add-workspace" aria-label="Add workspace"><Plus size={16} /></button>
-        </div>
-        <nav className="primary-nav" aria-label="Primary">
-          <NavButton icon={<House />} label="Home" active={page === "home"} onClick={() => { setPage("home"); setSelectedId(null); }} />
-          <NavButton icon={<ListMagnifyingGlass />} label="Sessions" active={page === "sessions"} onClick={() => setPage("sessions")} />
-          <NavButton icon={<Robot />} label="Agents" active={page === "agents"} onClick={() => setPage("agents")} />
-          <NavButton icon={<GitBranch />} label="Review" active={page === "review"} onClick={() => setPage("review")} />
-        </nav>
-        <div className="recents-heading">
-          <span>Recents</span><span className="recents-actions"><Command size={13} /><ListMagnifyingGlass size={14} /></span>
-        </div>
-        <div className="recent-list">
-          {sessions.slice(0, 9).map((session) => (
-            <button key={session.id} className={`recent-item ${selectedId === session.id ? "active" : ""}`} onClick={() => openSession(session.id)}>
-              <span className={`status-dot ${session.status}`} />
-              <span className="recent-copy"><strong>{session.title}</strong><small>{relativeTime(session.updated_at)} · {projectName(session.repo_root)}</small></span>
-              {session.ticket_key && <span className="tiny-ticket">{session.ticket_key}</span>}
-            </button>
-          ))}
-          {sessions.length === 0 && <div className="recent-empty">Your active work will stay here.</div>}
-        </div>
-        <div className="sidebar-footer">
-          <button className="profile"><span className="avatar">KH</span><span><strong>Local workspace</strong><small>{connected ? "Daemon connected" : "Reconnecting…"}</small></span></button>
-          <button className="icon-button" onClick={() => setDark((value) => !value)} aria-label="Toggle theme">{dark ? <Sun size={16} /> : <Moon size={16} />}</button>
-        </div>
-      </aside>
+    <div className={`ade ${themeClass(preferences.theme)} ${sidebarOpen ? "" : "sidebar-collapsed"}`}>
+      <Sidebar page={page} sessions={sessions} projects={projects} selectedId={selectedId} connected={connected} onPage={openPage} onOpen={openSession} />
 
       <main className="main-shell">
         <button className="sidebar-toggle icon-button" onClick={() => setSidebarOpen((value) => !value)} aria-label="Toggle sidebar"><SidebarSimple size={18} /></button>
         {!connected && <div className="connection-banner"><SpinnerGap className="spin" /> Connecting to the local daemon… {error}</div>}
         {connected && error && <button className="error-toast" onClick={() => setError(null)}><span>{error}</span><X /></button>}
         {selected ? (
-          <SessionWorkspace session={selected} onBack={() => setSelectedId(null)} onRefresh={refresh} />
+          <SessionWorkspace session={selected} preferences={preferences} onBack={() => setSelectedId(null)} onRefresh={refresh} />
         ) : page === "home" ? (
-          <Home sessions={sessions} projects={projects} meta={meta} onCreated={(session) => { void refresh(); openSession(session.id); }} onOpen={openSession} onError={setError} />
+          <Home sessions={sessions} projects={projects} meta={meta} preferences={preferences} onCreated={(session) => { void refresh(); openSession(session.id); }} onOpen={openSession} onError={setError} />
         ) : page === "sessions" ? (
           <SessionsPage sessions={sessions} onOpen={openSession} />
         ) : page === "agents" ? (
           <AgentsPage onUse={(prompt) => { sessionStorage.setItem("openade-template", prompt); setPage("home"); }} />
-        ) : (
+        ) : page === "review" ? (
           <ReviewPage projects={projects} sessions={sessions} />
+        ) : (
+          <SettingsPage preferences={preferences} onChange={updatePreferences} />
         )}
       </main>
     </div>
   );
 }
 
-function NavButton({ icon, label, active, onClick }: { icon: ReactNode; label: string; active: boolean; onClick: () => void }) {
-  return <button className={active ? "active" : ""} onClick={onClick}>{icon}<span>{label}</span></button>;
-}
-
-function Home({ sessions, projects, meta, onCreated, onOpen, onError }: { sessions: Session[]; projects: string[]; meta: Meta | null; onCreated: (session: Session) => void; onOpen: (id: string) => void; onError: (error: string | null) => void }) {
+function Home({ sessions, projects, meta, preferences, onCreated, onOpen, onError }: { sessions: Session[]; projects: string[]; meta: Meta | null; preferences: Preferences; onCreated: (session: Session) => void; onOpen: (id: string) => void; onError: (error: string | null) => void }) {
   const [prompt, setPrompt] = useState(() => sessionStorage.getItem("openade-template") ?? "");
   const [repo, setRepo] = useState(projects[0] ?? "");
-  const [agent, setAgent] = useState("claude");
+  const [agent, setAgent] = useState(preferences.default_agent);
   const [ticket, setTicket] = useState("");
   const [ticketURL, setTicketURL] = useState("");
   const [base, setBase] = useState("main");
@@ -181,10 +154,12 @@ function Home({ sessions, projects, meta, onCreated, onOpen, onError }: { sessio
   const [busy, setBusy] = useState(false);
 
   useEffect(() => { if (!repo && projects[0]) setRepo(projects[0]); }, [projects, repo]);
+  useEffect(() => { setAgent(preferences.default_agent); }, [preferences.default_agent]);
   useEffect(() => {
+    const preferredAvailable = meta?.agents.find((item) => item.id === preferences.default_agent)?.available;
     const installed = meta?.agents.find((item) => item.available)?.id;
-    if (installed) setAgent(installed);
-  }, [meta]);
+    if (preferredAvailable === false && installed) setAgent(installed);
+  }, [meta, preferences.default_agent]);
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
