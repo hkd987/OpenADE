@@ -24,6 +24,9 @@ target
 node_modules/
 apps/desktop/dist/
 apps/desktop/src-tauri/gen/
+apps/desktop/build/bin/
+apps/desktop/package.json.md5
+apps/desktop/src/wailsjs/
 
 # OpenADE local data
 .openade-data/
