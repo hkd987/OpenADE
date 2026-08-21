@@ -34,6 +34,7 @@ import {
   PullRequest,
   relativeTime,
   Session,
+  switchSessionSurface,
 } from "./api";
 import { SessionWorkspace } from "./SessionWorkspace";
 import { loadPreferences, Preferences, savePreferences, themeClass } from "./preferences";
@@ -71,6 +72,7 @@ function AppShell() {
   const [error, setError] = useState<string | null>(null);
   const [connected, setConnected] = useState(false);
   const [resumingConversationId, setResumingConversationId] = useState<string | null>(null);
+  const [switchingSessionId, setSwitchingSessionId] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -123,9 +125,32 @@ function AppShell() {
 
   const selected = sessions.find((session) => session.id === selectedId) ?? null;
   const visibleProjects = [...new Set([...scannedProjects, ...projects])];
-  const openSession = (id: string) => {
-    setSelectedId(id);
-    setPage("sessions");
+  const openSession = async (id: string) => {
+    if (switchingSessionId) return;
+    const current = sessions.find((session) => session.id === id);
+    if (!current) {
+      setSelectedId(id);
+      setPage("sessions");
+      return;
+    }
+    const preferredMode = preferredSessionMode(preferences, current.agent);
+    if (current.mode === preferredMode) {
+      setSelectedId(id);
+      setPage("sessions");
+      return;
+    }
+    setSwitchingSessionId(id);
+    setError(null);
+    try {
+      const switched = await switchSessionSurface(id, preferredMode);
+      setSessions((items) => items.map((item) => item.id === id ? switched : item));
+      setSelectedId(id);
+      setPage("sessions");
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setSwitchingSessionId(null);
+    }
   };
   const updatePreferences = (next: Preferences) => {
     setPreferences(next);
@@ -149,7 +174,7 @@ function AppShell() {
         title: conversation.title,
         prompt: "",
         agent: conversation.provider,
-        mode: "tui",
+        mode: preferredSessionMode(preferences, conversation.provider),
         resume_id: conversation.id,
         repo_root: conversation.project_root,
         base_branch: "HEAD",
@@ -235,7 +260,7 @@ function Home({ sessions, projects, meta, preferences, onCreated, onOpen, onErro
     setBusy(true);
     onError(null);
     try {
-      const session = await createSession({ title: prompt.trim().split("\n")[0].slice(0, 68), prompt: prompt.trim(), agent, mode: preferences.session_surface === "terminal" && ["codex", "claude"].includes(agent) ? "tui" : "chat", repo_root: repo.trim(), base_branch: base.trim() || "HEAD", ticket_key: ticket.trim(), ticket_url: ticketURL.trim() });
+      const session = await createSession({ title: prompt.trim().split("\n")[0].slice(0, 68), prompt: prompt.trim(), agent, mode: preferredSessionMode(preferences, agent), repo_root: repo.trim(), base_branch: base.trim() || "HEAD", ticket_key: ticket.trim(), ticket_url: ticketURL.trim() });
       sessionStorage.removeItem("openade-template");
       onCreated(session);
     } catch (reason) {
@@ -284,6 +309,12 @@ function Home({ sessions, projects, meta, preferences, onCreated, onOpen, onErro
       {visibleSessions.length ? <div className="active-grid">{visibleSessions.map((session) => <SessionCard key={session.id} session={session} onOpen={() => onOpen(session.id)} />)}</div> : <div className="quiet-empty"><strong>No sessions yet</strong><p>Describe a task above to create the first isolated worktree.</p></div>}
     </section>
   </div>;
+}
+
+function preferredSessionMode(preferences: Preferences, agent: string): "chat" | "tui" {
+  return preferences.session_surface === "terminal" && ["codex", "codex-cli", "claude", "claude-code"].includes(agent)
+    ? "tui"
+    : "chat";
 }
 
 function SessionCard({ session, onOpen }: { session: Session; onOpen: () => void }) {

@@ -103,6 +103,7 @@ func (d *Daemon) routes() http.Handler {
 	mux.HandleFunc("GET /api/sessions/{id}/stream", d.handleStream)
 	mux.HandleFunc("POST /api/sessions/{id}/input", d.handleInput)
 	mux.HandleFunc("POST /api/sessions/{id}/messages", d.handleMessage)
+	mux.HandleFunc("POST /api/sessions/{id}/surface", d.handleSessionSurface)
 	mux.HandleFunc("GET /api/sessions/{id}/message-queue", d.handleListMessageQueue)
 	mux.HandleFunc("POST /api/sessions/{id}/message-queue", d.handleEnqueueMessage)
 	mux.HandleFunc("DELETE /api/sessions/{id}/message-queue/{messageID}", d.handleDeleteQueuedMessage)
@@ -271,6 +272,31 @@ func (d *Daemon) handleMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	session, _ = d.store.GetSession(session.ID)
+	writeJSON(w, http.StatusAccepted, session)
+}
+
+func (d *Daemon) handleSessionSurface(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Mode string `json:"mode"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	session, err := d.store.GetSession(r.PathValue("id"))
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	if err := d.sessions.SwitchSurface(session, body.Mode); err != nil {
+		writeError(w, http.StatusConflict, err)
+		return
+	}
+	session, err = d.store.GetSession(session.ID)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
 	writeJSON(w, http.StatusAccepted, session)
 }
 

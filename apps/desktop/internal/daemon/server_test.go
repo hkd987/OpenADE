@@ -364,6 +364,187 @@ func TestCreateSessionCanResumeAnImportedCodexConversation(t *testing.T) {
 	}
 }
 
+func TestCreateSessionCanResumeAnImportedCodexConversationInNativeChat(t *testing.T) {
+	repo := createFixtureRepository(t)
+	binDir := t.TempDir()
+	fakeCodex := filepath.Join(binDir, "codex")
+	if err := os.WriteFile(fakeCodex, []byte("#!/bin/sh\nprintf 'NATIVE_IMPORT_ARGS:%s\\n' \"$*\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	d, err := New(Config{DataDir: t.TempDir(), Addr: "127.0.0.1:0"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.store.Close()
+
+	session, err := d.sessions.Create(context.Background(), CreateSessionRequest{
+		Title: "Imported native chat", Agent: "codex", Mode: "chat", ResumeID: "existing-thread", RepoRoot: repo, BaseBranch: "main",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if session.Mode != "chat" || session.Status != "completed" {
+		t.Fatalf("imported native session = %+v", session)
+	}
+
+	body, _ := json.Marshal(map[string]string{"text": "continue natively"})
+	response := httptest.NewRecorder()
+	d.routes().ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/sessions/"+session.ID+"/messages", bytes.NewReader(body)))
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("native follow-up status=%d body=%s", response.Code, response.Body.String())
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	var transcript []byte
+	for time.Now().Before(deadline) {
+		transcript, _ = os.ReadFile(filepath.Join(d.config.DataDir, "transcripts", session.ID+".log"))
+		if strings.Contains(string(transcript), "resume existing-thread continue natively") {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !strings.Contains(string(transcript), "resume existing-thread continue natively") {
+		t.Fatalf("native import did not resume the selected provider conversation: %s", transcript)
+	}
+}
+
+func TestSessionSurfaceFollowsThePreferredMode(t *testing.T) {
+	repo := createFixtureRepository(t)
+	binDir := t.TempDir()
+	fakeCodex := filepath.Join(binDir, "codex")
+	script := `#!/bin/sh
+printf '%s\n' '{"type":"thread.started","thread_id":"thread-surface"}'
+printf 'SURFACE_ARGS:%s\n' "$*"
+`
+	if err := os.WriteFile(fakeCodex, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	d, err := New(Config{DataDir: t.TempDir(), Addr: "127.0.0.1:0"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.store.Close()
+
+	session, err := d.sessions.Create(context.Background(), CreateSessionRequest{
+		Title: "Surface switch", Prompt: "first turn", Agent: "codex", Mode: "chat", RepoRoot: repo, BaseBranch: "main",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		session, _ = d.store.GetSession(session.ID)
+		if session.Status == "completed" {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	switchSurface := func(mode string) Session {
+		t.Helper()
+		body, _ := json.Marshal(map[string]string{"mode": mode})
+		response := httptest.NewRecorder()
+		d.routes().ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/sessions/"+session.ID+"/surface", bytes.NewReader(body)))
+		if response.Code != http.StatusAccepted {
+			t.Fatalf("switch to %s status=%d body=%s", mode, response.Code, response.Body.String())
+		}
+		var switched Session
+		if err := json.Unmarshal(response.Body.Bytes(), &switched); err != nil {
+			t.Fatal(err)
+		}
+		return switched
+	}
+
+	session = switchSurface("tui")
+	if session.Mode != "tui" {
+		t.Fatalf("mode after TUI switch = %s", session.Mode)
+	}
+	deadline = time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		session, _ = d.store.GetSession(session.ID)
+		if session.Status == "completed" {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	transcript, _ := os.ReadFile(filepath.Join(d.config.DataDir, "transcripts", session.ID+".log"))
+	if !strings.Contains(string(transcript), "resume --include-non-interactive --no-alt-screen") || !strings.Contains(string(transcript), "thread-surface") {
+		t.Fatalf("TUI did not resume the same provider conversation: %s", transcript)
+	}
+
+	session = switchSurface("chat")
+	if session.Mode != "chat" || session.Status != "completed" {
+		t.Fatalf("mode after native chat switch = %+v", session)
+	}
+}
+
+func TestActiveTUISwitchesToNativeChatAndResumesOnTheNextMessage(t *testing.T) {
+	repo := createFixtureRepository(t)
+	binDir := t.TempDir()
+	fakeCodex := filepath.Join(binDir, "codex")
+	script := `#!/bin/sh
+case "$*" in
+  *--no-alt-screen*)
+    printf 'TUI_READY\n'
+    trap 'exit 0' TERM
+    while :; do sleep 0.1; done
+    ;;
+  *)
+    printf '%s\n' '{"type":"thread.started","thread_id":"thread-native-fallback"}'
+    printf 'NATIVE_ARGS:%s\n' "$*"
+    ;;
+esac
+`
+	if err := os.WriteFile(fakeCodex, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	d, err := New(Config{DataDir: t.TempDir(), Addr: "127.0.0.1:0"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.store.Close()
+
+	session, err := d.sessions.Create(context.Background(), CreateSessionRequest{
+		Title: "Active TUI", Prompt: "first turn", Agent: "codex", Mode: "tui", RepoRoot: repo, BaseBranch: "main",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := json.Marshal(map[string]string{"mode": "chat"})
+	response := httptest.NewRecorder()
+	d.routes().ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/sessions/"+session.ID+"/surface", bytes.NewReader(body)))
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("switch active TUI status=%d body=%s", response.Code, response.Body.String())
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &session); err != nil {
+		t.Fatal(err)
+	}
+	if session.Mode != "chat" || session.Status != "completed" {
+		t.Fatalf("active TUI did not settle into native chat: %+v", session)
+	}
+
+	messageBody, _ := json.Marshal(map[string]string{"text": "continue after switching"})
+	messageResponse := httptest.NewRecorder()
+	d.routes().ServeHTTP(messageResponse, httptest.NewRequest(http.MethodPost, "/api/sessions/"+session.ID+"/messages", bytes.NewReader(messageBody)))
+	if messageResponse.Code != http.StatusAccepted {
+		t.Fatalf("native continuation status=%d body=%s", messageResponse.Code, messageResponse.Body.String())
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	var transcript []byte
+	for time.Now().Before(deadline) {
+		transcript, _ = os.ReadFile(filepath.Join(d.config.DataDir, "transcripts", session.ID+".log"))
+		if strings.Contains(string(transcript), "resume --last continue after switching") {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !strings.Contains(string(transcript), "resume --last continue after switching") {
+		t.Fatalf("native chat did not continue the TUI conversation: %s", transcript)
+	}
+}
+
 func TestCompletedCodexSessionCanResumeWithFollowUpMessage(t *testing.T) {
 	repo := createFixtureRepository(t)
 	binDir := t.TempDir()

@@ -182,6 +182,12 @@ export const createSession = (input: CreateSessionInput) =>
     body: JSON.stringify(input),
   });
 
+export const switchSessionSurface = (id: string, mode: "chat" | "tui") =>
+  request<Session>(`/api/sessions/${id}/surface`, {
+    method: "POST",
+    body: JSON.stringify({ mode }),
+  });
+
 export const sendInput = (id: string, data: string) =>
   request<void>(`/api/sessions/${id}/input`, {
     method: "POST",

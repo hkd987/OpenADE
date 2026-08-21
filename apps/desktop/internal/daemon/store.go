@@ -240,6 +240,14 @@ finished_at=COALESCE(?, finished_at) WHERE id=?`, status, pid, exitCode, encodeT
 	return err
 }
 
+func (s *Store) UpdateMode(id, mode string) error {
+	result, err := s.db.Exec(`UPDATE sessions SET mode=?, updated_at=? WHERE id=?`, mode, encodeTime(time.Now().UTC()), id)
+	if err != nil {
+		return err
+	}
+	return requireAffected(result, "session")
+}
+
 func (s *Store) SetPR(id, url string) error {
 	_, err := s.db.Exec(`UPDATE sessions SET pr_url=?, updated_at=? WHERE id=?`, url, encodeTime(time.Now().UTC()), id)
 	return err

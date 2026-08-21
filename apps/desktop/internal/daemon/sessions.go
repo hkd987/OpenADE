@@ -41,11 +41,12 @@ type liveSession struct {
 }
 
 type SessionManager struct {
-	store   *Store
-	dataDir string
-	mu      sync.RWMutex
-	queueMu sync.Mutex
-	live    map[string]*liveSession
+	store     *Store
+	dataDir   string
+	mu        sync.RWMutex
+	queueMu   sync.Mutex
+	surfaceMu sync.Mutex
+	live      map[string]*liveSession
 }
 
 func NewSessionManager(store *Store, dataDir string) *SessionManager {
@@ -67,9 +68,6 @@ func (m *SessionManager) Create(ctx context.Context, request CreateSessionReques
 	}
 	if request.Mode != "chat" && request.Mode != "tui" {
 		return Session{}, fmt.Errorf("session mode must be chat or tui")
-	}
-	if request.ResumeID != "" && request.Mode != "tui" {
-		return Session{}, fmt.Errorf("imported conversations must resume in direct TUI mode")
 	}
 	if request.BaseBranch == "" {
 		request.BaseBranch = "HEAD"
@@ -98,11 +96,16 @@ func (m *SessionManager) Create(ctx context.Context, request CreateSessionReques
 	}
 	var launchErr error
 	if request.ResumeID != "" {
-		var program string
-		var args []string
-		program, args, launchErr = tuiProviderCommand(session, request.ResumeID)
-		if launchErr == nil {
-			launchErr = m.launchCommand(session, program, args)
+		launchErr = m.writeProviderSessionMarker(session, request.ResumeID)
+		if launchErr == nil && request.Mode == "tui" {
+			var program string
+			var args []string
+			program, args, launchErr = tuiProviderCommand(session, request.ResumeID)
+			if launchErr == nil {
+				launchErr = m.launchCommand(session, program, args)
+			}
+		} else if launchErr == nil {
+			launchErr = m.store.UpdateRuntime(session.ID, "completed", 0, nil)
 		}
 	} else {
 		launchErr = m.launch(session)
@@ -112,6 +115,30 @@ func (m *SessionManager) Create(ctx context.Context, request CreateSessionReques
 		return m.store.GetSession(id)
 	}
 	return m.store.GetSession(id)
+}
+
+func (m *SessionManager) writeProviderSessionMarker(session Session, providerID string) error {
+	marker := map[string]string{"type": "openade.provider_session"}
+	if strings.Contains(strings.ToLower(session.Agent), "codex") {
+		marker["thread_id"] = providerID
+	} else {
+		marker["session_id"] = providerID
+	}
+	encoded, err := json.Marshal(marker)
+	if err != nil {
+		return err
+	}
+	transcriptDir := filepath.Join(m.dataDir, "transcripts")
+	if err := os.MkdirAll(transcriptDir, 0o755); err != nil {
+		return err
+	}
+	file, err := os.OpenFile(filepath.Join(transcriptDir, session.ID+".log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	_, err = file.Write(append(encoded, '\n'))
+	return err
 }
 
 func tuiProviderCommand(session Session, providerID string) (string, []string, error) {
@@ -179,9 +206,6 @@ func (m *SessionManager) Resume(session Session, prompt string) error {
 		return fmt.Errorf("read session transcript: %w", err)
 	}
 	providerID := providerSessionID(transcript, session.Agent)
-	if providerID == "" {
-		return fmt.Errorf("%s session id was not found in the transcript", session.Agent)
-	}
 	marker, _ := json.Marshal(map[string]string{"type": "openade.user_message", "text": prompt})
 	file, err := os.OpenFile(transcriptPath, os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
@@ -193,11 +217,76 @@ func (m *SessionManager) Resume(session Session, prompt string) error {
 	}
 	_ = file.Close()
 
-	program, args, err := resumeAgentCommand(session, providerID, prompt)
+	var program string
+	var args []string
+	if providerID == "" {
+		program, args, err = resumeLatestAgentCommand(session, prompt)
+	} else {
+		program, args, err = resumeAgentCommand(session, providerID, prompt)
+	}
 	if err != nil {
 		return err
 	}
 	return m.launchCommand(session, program, args)
+}
+
+func (m *SessionManager) SwitchSurface(session Session, mode string) error {
+	m.surfaceMu.Lock()
+	defer m.surfaceMu.Unlock()
+	if mode != "chat" && mode != "tui" {
+		return fmt.Errorf("session mode must be chat or tui")
+	}
+	agent := strings.ToLower(session.Agent)
+	if agent != "codex" && agent != "codex-cli" && agent != "claude" && agent != "claude-code" {
+		return fmt.Errorf("surface switching is only supported for Codex and Claude Code")
+	}
+	if session.Mode == mode {
+		return nil
+	}
+	if live, err := m.getLive(session.ID); err == nil && live.cmd.Process != nil {
+		if err := live.cmd.Process.Signal(syscall.SIGTERM); err != nil {
+			return err
+		}
+		deadline := time.Now().Add(5 * time.Second)
+		for time.Now().Before(deadline) {
+			if _, err := m.getLive(session.ID); err != nil {
+				break
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		if _, err := m.getLive(session.ID); err == nil {
+			return fmt.Errorf("timed out stopping the current %s surface", session.Mode)
+		}
+	}
+	if err := m.store.UpdateMode(session.ID, mode); err != nil {
+		return err
+	}
+	session.Mode = mode
+	if mode == "chat" {
+		if err := m.store.UpdateRuntime(session.ID, "completed", 0, nil); err != nil {
+			return err
+		}
+		go func() { _ = m.DrainQueue(session.ID) }()
+		return nil
+	}
+
+	transcript, _ := os.ReadFile(filepath.Join(m.dataDir, "transcripts", session.ID+".log"))
+	providerID := providerSessionID(transcript, session.Agent)
+	var program string
+	var args []string
+	var err error
+	if providerID == "" {
+		program, args, err = tuiResumeCommand(session)
+	} else {
+		program, args, err = tuiProviderCommand(session, providerID)
+	}
+	if err == nil {
+		err = m.launchCommand(session, program, args)
+	}
+	if err != nil {
+		_ = m.store.UpdateRuntime(session.ID, "failed", 0, nil)
+	}
+	return err
 }
 
 func (m *SessionManager) ResumeTUI(session Session) error {
@@ -232,6 +321,29 @@ func resumeAgentCommand(session Session, providerID, prompt string) (string, []s
 		}, nil
 	case "codex":
 		return "/bin/sh", []string{"-lc", `exec "$1" exec --json --sandbox workspace-write resume "$2" "$3" </dev/null`, "openade-codex-resume", program, providerID, prompt}, nil
+	default:
+		return "", nil, fmt.Errorf("follow-up messages are not supported for %s", session.Agent)
+	}
+}
+
+func resumeLatestAgentCommand(session Session, prompt string) (string, []string, error) {
+	agent := strings.ToLower(session.Agent)
+	name := map[string]string{"claude-code": "claude", "codex-cli": "codex"}[agent]
+	if name == "" {
+		name = agent
+	}
+	program, err := resolveProgram(name)
+	if err != nil {
+		return "", nil, err
+	}
+	switch name {
+	case "claude":
+		return program, []string{
+			"--continue", "--print", "--verbose", "--output-format", "stream-json",
+			"--include-partial-messages", "--permission-mode", "acceptEdits", prompt,
+		}, nil
+	case "codex":
+		return "/bin/sh", []string{"-lc", `exec "$1" exec --json --sandbox workspace-write resume --last "$2" </dev/null`, "openade-codex-resume-last", program, prompt}, nil
 	default:
 		return "", nil, fmt.Errorf("follow-up messages are not supported for %s", session.Agent)
 	}
