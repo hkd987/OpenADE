@@ -25,6 +25,7 @@ type CreateSessionRequest struct {
 	Prompt     string `json:"prompt"`
 	Agent      string `json:"agent"`
 	Mode       string `json:"mode"`
+	ResumeID   string `json:"resume_id"`
 	RepoRoot   string `json:"repo_root"`
 	BaseBranch string `json:"base_branch"`
 	TicketKey  string `json:"ticket_key"`
@@ -66,6 +67,9 @@ func (m *SessionManager) Create(ctx context.Context, request CreateSessionReques
 	if request.Mode != "chat" && request.Mode != "tui" {
 		return Session{}, fmt.Errorf("session mode must be chat or tui")
 	}
+	if request.ResumeID != "" && request.Mode != "tui" {
+		return Session{}, fmt.Errorf("imported conversations must resume in direct TUI mode")
+	}
 	if request.BaseBranch == "" {
 		request.BaseBranch = "HEAD"
 	}
@@ -91,11 +95,41 @@ func (m *SessionManager) Create(ctx context.Context, request CreateSessionReques
 	if err := m.store.CreateSession(session); err != nil {
 		return Session{}, err
 	}
-	if err := m.launch(session); err != nil {
+	var launchErr error
+	if request.ResumeID != "" {
+		var program string
+		var args []string
+		program, args, launchErr = tuiProviderCommand(session, request.ResumeID)
+		if launchErr == nil {
+			launchErr = m.launchCommand(session, program, args)
+		}
+	} else {
+		launchErr = m.launch(session)
+	}
+	if launchErr != nil {
 		_ = m.store.UpdateRuntime(id, "failed", 0, nil)
 		return m.store.GetSession(id)
 	}
 	return m.store.GetSession(id)
+}
+
+func tuiProviderCommand(session Session, providerID string) (string, []string, error) {
+	agent := strings.ToLower(session.Agent)
+	if mapped := map[string]string{"claude-code": "claude", "codex-cli": "codex"}[agent]; mapped != "" {
+		agent = mapped
+	}
+	program, err := resolveProgram(agent)
+	if err != nil {
+		return "", nil, err
+	}
+	switch agent {
+	case "codex":
+		return program, []string{"resume", "--include-non-interactive", "--no-alt-screen", "-C", session.WorktreePath, providerID}, nil
+	case "claude":
+		return program, []string{"--resume", providerID, "--permission-mode", "acceptEdits"}, nil
+	default:
+		return "", nil, fmt.Errorf("conversation import is only supported for Codex and Claude Code")
+	}
 }
 
 func (m *SessionManager) launch(session Session) error {

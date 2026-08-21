@@ -141,7 +141,7 @@ func (d *Daemon) handleScanProjects(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"root": body.Root, "projects": projects})
+	writeJSON(w, http.StatusOK, map[string]any{"root": body.Root, "projects": projects, "conversations": discoverExternalConversations(body.Root, projects)})
 }
 
 func cors(next http.Handler) http.Handler {

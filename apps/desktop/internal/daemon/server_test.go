@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -269,6 +270,75 @@ func TestProjectRootScanFindsRepositoriesAndSkipsDependencyTrees(t *testing.T) {
 	want := []string{filepath.Join(root, "team", "alpha"), filepath.Join(root, "team", "beta")}
 	if strings.Join(payload.Projects, "|") != strings.Join(want, "|") {
 		t.Fatalf("projects=%q want=%q", payload.Projects, want)
+	}
+}
+
+func TestProjectRootScanIncludesLocalProviderConversations(t *testing.T) {
+	root := t.TempDir()
+	repo := filepath.Join(root, "team", "alpha")
+	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	codexDir := filepath.Join(home, ".codex", "sessions", "2026", "08", "21")
+	if err := os.MkdirAll(codexDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	history := `{"type":"session_meta","payload":{"id":"existing-codex-session","cwd":` + fmt.Sprintf("%q", repo) + `}}` + "\n" +
+		`{"type":"event_msg","payload":{"type":"user_message","message":"Finish the imported parser cleanup"}}` + "\n"
+	if err := os.WriteFile(filepath.Join(codexDir, "session.jsonl"), []byte(history), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	d, err := New(Config{DataDir: t.TempDir(), Addr: "127.0.0.1:0"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.store.Close()
+	body, _ := json.Marshal(map[string]string{"root": root})
+	response := httptest.NewRecorder()
+	d.routes().ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/projects/scan", bytes.NewReader(body)))
+	var payload struct {
+		Conversations []ExternalConversation `json:"conversations"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if len(payload.Conversations) != 1 || payload.Conversations[0].ID != "existing-codex-session" || payload.Conversations[0].ProjectRoot != repo || payload.Conversations[0].Title != "Finish the imported parser cleanup" {
+		t.Fatalf("conversations=%+v", payload.Conversations)
+	}
+}
+
+func TestCreateSessionCanResumeAnImportedCodexConversation(t *testing.T) {
+	repo := createFixtureRepository(t)
+	binDir := t.TempDir()
+	fakeCodex := filepath.Join(binDir, "codex")
+	if err := os.WriteFile(fakeCodex, []byte("#!/bin/sh\nprintf 'IMPORTED_ARGS:%s\\n' \"$*\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	d, err := New(Config{DataDir: t.TempDir(), Addr: "127.0.0.1:0"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.store.Close()
+	session, err := d.sessions.Create(context.Background(), CreateSessionRequest{
+		Title: "Imported chat", Agent: "codex", Mode: "tui", ResumeID: "existing-thread", RepoRoot: repo, BaseBranch: "main",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	var transcript []byte
+	for time.Now().Before(deadline) {
+		transcript, _ = os.ReadFile(filepath.Join(d.config.DataDir, "transcripts", session.ID+".log"))
+		if strings.Contains(string(transcript), "IMPORTED_ARGS:") {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !strings.Contains(string(transcript), "resume --include-non-interactive --no-alt-screen") || !strings.Contains(string(transcript), "existing-thread") {
+		t.Fatalf("imported conversation was not resumed: %q", transcript)
 	}
 }
 
