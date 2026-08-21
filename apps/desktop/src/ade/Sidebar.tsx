@@ -53,6 +53,13 @@ export function Sidebar({
         ...externalConversations.filter((conversation) => conversation.project_root === root).map((conversation) => ({ kind: "external" as const, updatedAt: conversation.updated_at, conversation })),
       ].sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt));
       return { root, items };
+    }).sort((left, right) => {
+      const leftUpdated = left.items[0]?.updatedAt;
+      const rightUpdated = right.items[0]?.updatedAt;
+      if (leftUpdated && rightUpdated) return Date.parse(rightUpdated) - Date.parse(leftUpdated);
+      if (leftUpdated) return -1;
+      if (rightUpdated) return 1;
+      return projectName(left.root).localeCompare(projectName(right.root));
     });
   }, [externalConversations, projects, sessions]);
 

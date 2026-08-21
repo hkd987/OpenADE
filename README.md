@@ -122,7 +122,9 @@ local skills/commands picker. **Direct TUI** attaches xterm to the provider's
 real interactive CLI inside the session worktree; the daemon owns that PTY, so
 closing and reopening the desktop does not interrupt it. Independent project
 shells remain separate tabs. Settings can also scan a workspace folder for Git
-projects and group indexed sessions beneath each project in the sidebar.
+projects and group indexed OpenADE sessions plus existing local Codex and Claude
+conversations beneath each project. Selecting imported history creates an
+isolated worktree and resumes the original conversation in its provider TUI.
 
 **From a release** (Linux x86_64/aarch64, macOS Intel/Apple Silicon):
 download the tarball for your platform from

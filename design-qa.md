@@ -30,7 +30,8 @@
 1. Initial implementation: blocked by three P1 issues observed in the live app: streaming activity auto-expanded, Direct TUI opened the independent-shell panel instead of the provider PTY, and the composer footer had no commands/skills entry point.
 2. First correction: activity stayed collapsed while running and the footer baseline was corrected. Direct TUI still inherited the terminal-panel default and hid its primary PTY.
 3. Second correction: Direct TUI became the primary session surface, survived desktop restart, accepted real Codex keyboard input, and exposed Resume after stopping. The provider-aware commands menu and workspace-root settings were then verified.
-4. Final comparison: no actionable P0/P1/P2 mismatch remains. The implementation intentionally shows the requested collapsed running state, whereas the source chat screenshot shows a completed expanded state.
+4. Project continuity correction: the workspace scan now finds local Codex and Claude histories, groups them with the matching repository, combines them into Recents, and resumes the original provider conversation in a new isolated worktree.
+5. Final comparison: no actionable P0/P1/P2 mismatch remains. The implementation intentionally shows the requested collapsed running state, whereas the source chat screenshot shows a completed expanded state.
 
 ## Interactions tested
 
@@ -42,6 +43,7 @@
 - Verified the native response, Markdown surface, copy action, plus button, footer status, and send button alignment.
 - Opened the provider-aware skills menu and verified local Codex/shared/project skills, descriptions, filtering, and invocation syntax.
 - Verified Glass, Native chat/Direct TUI, compact activity, harness default, and workspace-folder controls in Settings.
+- Verified provider-history parsing, repository matching, sidebar rendering, and one-click Direct TUI resume with automated regression coverage.
 - Checked the macOS accessibility tree after each primary interaction; no clipped persistent controls or inaccessible primary actions were found.
 
 ## Final result
