@@ -156,9 +156,19 @@ func agentCommand(session Session) (string, []string, string, error) {
 	case "claude":
 		args := []string{"--name", session.Title}
 		if session.Prompt != "" {
-			args = append(args, session.Prompt)
+			args = append(args,
+				"--print", "--verbose", "--output-format", "stream-json",
+				"--include-partial-messages", "--permission-mode", "acceptEdits",
+				session.Prompt,
+			)
 		}
 		return program, args, "", nil
+	case "codex":
+		if session.Prompt != "" {
+			// Codex reads stdin in exec mode even with a prompt. Keep stdout on the
+			// PTY for live events while closing only stdin so the run can begin.
+			return "/bin/sh", []string{"-lc", `exec "$1" exec --json --sandbox workspace-write "$2" </dev/null`, "openade-codex", program, session.Prompt}, "", nil
+		}
 	default:
 		if session.Prompt != "" {
 			return program, []string{session.Prompt}, "", nil
