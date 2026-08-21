@@ -102,6 +102,7 @@ func (d *Daemon) routes() http.Handler {
 	mux.HandleFunc("POST /api/sessions/{id}/input", d.handleInput)
 	mux.HandleFunc("POST /api/sessions/{id}/messages", d.handleMessage)
 	mux.HandleFunc("POST /api/sessions/{id}/resume-tui", d.handleResumeTUI)
+	mux.HandleFunc("GET /api/sessions/{id}/commands", d.handleSessionCommands)
 	mux.HandleFunc("POST /api/sessions/{id}/resize", d.handleResize)
 	mux.HandleFunc("POST /api/sessions/{id}/stop", d.handleStop)
 	mux.HandleFunc("GET /api/sessions/{id}/diff", d.handleDiff)
@@ -279,6 +280,15 @@ func (d *Daemon) handleResumeTUI(w http.ResponseWriter, r *http.Request) {
 	}
 	session, _ = d.store.GetSession(session.ID)
 	writeJSON(w, http.StatusAccepted, session)
+}
+
+func (d *Daemon) handleSessionCommands(w http.ResponseWriter, r *http.Request) {
+	session, err := d.store.GetSession(r.PathValue("id"))
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"commands": discoverAgentCommands(session)})
 }
 
 func (d *Daemon) handleResize(w http.ResponseWriter, r *http.Request) {
