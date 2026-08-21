@@ -18,6 +18,7 @@ import {
   getTicket,
   projectName,
   sendInput,
+  sendMessage,
   Session,
   stopSession,
   streamURL,
@@ -37,15 +38,18 @@ export function SessionWorkspace({ session, onBack, onRefresh }: { session: Sess
   const [input, setInput] = useState("");
   const [output, setOutput] = useState("");
   const [busy, setBusy] = useState(false);
+  const [streamVersion, setStreamVersion] = useState(0);
   const outputRef = useRef<HTMLDivElement>(null);
   const active = ["running", "starting", "waiting"].includes(session.status);
+  const resumable = ["claude", "claude-code", "codex", "codex-cli"].includes(session.agent) && !active;
+  const canMessage = active || resumable;
 
   useEffect(() => {
     setTab("review");
     setRightOpen(true);
     setPanelError(null);
     setTicket(null);
-  }, [session.id]);
+  }, [session.id, streamVersion]);
 
   useEffect(() => {
     setOutput("");
@@ -71,11 +75,18 @@ export function SessionWorkspace({ session, onBack, onRefresh }: { session: Sess
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
-    if (!input.trim() || !active) return;
+    if (!input.trim() || !canMessage) return;
     const value = input.trim();
     setInput("");
     try {
-      await sendInput(session.id, value + "\n");
+      if (active) {
+        await sendInput(session.id, value + "\n");
+      } else {
+        setOutput((current) => `${current}\n${JSON.stringify({ type: "openade.user_message", text: value })}\n`);
+        await sendMessage(session.id, value);
+        setStreamVersion((current) => current + 1);
+        await onRefresh();
+      }
     } catch (reason) {
       setPanelError(reason instanceof Error ? reason.message : String(reason));
     }
@@ -116,9 +127,9 @@ export function SessionWorkspace({ session, onBack, onRefresh }: { session: Sess
           <textarea
             value={input}
             onChange={(event) => setInput(event.target.value)}
-            placeholder={active ? `Message ${agentLabel(session.agent)}…` : "This run is complete"}
+            placeholder={canMessage ? `Message ${agentLabel(session.agent)}…` : "This run does not support follow-up messages"}
             rows={2}
-            disabled={!active}
+            disabled={!canMessage}
             onKeyDown={(event) => {
               if (event.key === "Enter" && !event.shiftKey) {
                 event.preventDefault();
@@ -127,8 +138,8 @@ export function SessionWorkspace({ session, onBack, onRefresh }: { session: Sess
             }}
           />
           <div>
-            <span className="runtime-chip"><span className={`status-dot ${session.status}`} />{active ? `${agentLabel(session.agent)} is attached` : `Run ${session.status}`}</span>
-            <button className="send-button" disabled={!active || !input.trim()} aria-label="Send message"><ArrowUp weight="bold" /></button>
+            <span className="runtime-chip"><span className={`status-dot ${session.status}`} />{active ? `${agentLabel(session.agent)} is attached` : resumable ? "Conversation can continue" : `Run ${session.status}`}</span>
+            <button className="send-button" disabled={!canMessage || !input.trim()} aria-label="Send message"><ArrowUp weight="bold" /></button>
           </div>
         </form>
       </section>

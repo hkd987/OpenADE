@@ -139,6 +139,12 @@ export const sendInput = (id: string, data: string) =>
     body: JSON.stringify({ data }),
   });
 
+export const sendMessage = (id: string, text: string) =>
+  request<Session>(`/api/sessions/${id}/messages`, {
+    method: "POST",
+    body: JSON.stringify({ text }),
+  });
+
 export const resizeTerminal = (id: string, rows: number, cols: number) =>
   request<void>(`/api/sessions/${id}/resize`, {
     method: "POST",
