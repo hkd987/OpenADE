@@ -36,9 +36,10 @@ import { Preferences } from "./preferences";
 type WorkTab = "review" | "terminal" | "pull-request" | "ticket";
 
 export function SessionWorkspace({ session, preferences, onBack, onRefresh }: { session: Session; preferences: Preferences; onBack: () => void; onRefresh: () => Promise<void> }) {
-  const defaultTab: WorkTab = session.agent === "shell" || preferences.session_surface === "terminal" ? "terminal" : "review";
+  const tuiMode = session.mode === "tui";
+  const defaultTab: WorkTab = session.agent === "shell" || (preferences.session_surface === "terminal" && !tuiMode) ? "terminal" : "review";
   const [tab, setTab] = useState<WorkTab>(defaultTab);
-  const [rightOpen, setRightOpen] = useState(session.agent === "shell" || preferences.session_surface === "terminal");
+  const [rightOpen, setRightOpen] = useState(session.agent === "shell" || (preferences.session_surface === "terminal" && !tuiMode));
   const [ticket, setTicket] = useState<Ticket | null>(null);
   const [panelError, setPanelError] = useState<string | null>(null);
   const [input, setInput] = useState("");
@@ -48,7 +49,6 @@ export function SessionWorkspace({ session, preferences, onBack, onRefresh }: { 
   const [commands, setCommands] = useState<AgentCommand[]>([]);
   const [commandOpen, setCommandOpen] = useState(false);
   const outputRef = useRef<HTMLDivElement>(null);
-  const tuiMode = session.mode === "tui";
   const active = ["running", "starting", "waiting"].includes(session.status);
   const resumable = ["claude", "claude-code", "codex", "codex-cli"].includes(session.agent) && !active;
   const chatCapable = session.agent !== "shell" && !tuiMode;
@@ -56,10 +56,10 @@ export function SessionWorkspace({ session, preferences, onBack, onRefresh }: { 
 
   useEffect(() => {
     setTab(defaultTab);
-    setRightOpen(session.agent === "shell" || preferences.session_surface === "terminal");
+    setRightOpen(session.agent === "shell" || (preferences.session_surface === "terminal" && !tuiMode));
     setPanelError(null);
     setTicket(null);
-  }, [defaultTab, preferences.session_surface, session.agent, session.id]);
+  }, [defaultTab, preferences.session_surface, session.agent, session.id, tuiMode]);
 
   useEffect(() => {
     if (tuiMode) return;
@@ -138,7 +138,7 @@ export function SessionWorkspace({ session, preferences, onBack, onRefresh }: { 
   };
 
   return (
-    <div className={`session-workspace ${rightOpen ? "with-panel" : ""} ${rightOpen && tab === "review" ? "panel-review" : ""} ${!chatCapable ? "shell-workspace" : ""}`}>
+    <div className={`session-workspace ${rightOpen ? "with-panel" : ""} ${rightOpen && tab === "review" ? "panel-review" : ""} ${session.agent === "shell" ? "shell-workspace" : ""}`}>
       <header className="session-header">
         <button className="icon-button" onClick={onBack} aria-label="Back"><ArrowLeft /></button>
         <span className={`status-dot ${session.status}`} />

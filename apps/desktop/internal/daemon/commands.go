@@ -82,12 +82,23 @@ func commandDescription(path string) string {
 	}
 	defer file.Close()
 	scanner := bufio.NewScanner(file)
+	inFrontmatter := false
+	frontmatterSeen := false
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
+		if line == "---" {
+			if !frontmatterSeen {
+				frontmatterSeen = true
+				inFrontmatter = true
+			} else if inFrontmatter {
+				inFrontmatter = false
+			}
+			continue
+		}
 		if strings.HasPrefix(line, "description:") {
 			return strings.Trim(strings.TrimSpace(strings.TrimPrefix(line, "description:")), `"'`)
 		}
-		if line != "" && line != "---" && !strings.HasPrefix(line, "#") {
+		if !inFrontmatter && line != "" && !strings.HasPrefix(line, "#") {
 			return strings.TrimSpace(line)
 		}
 	}
